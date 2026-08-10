@@ -9,7 +9,7 @@ static const char *const TAG2 = "hcpbridge.switch2";
 // Implementation for HCPBridgeSwitchVent
 
 void HCPBridgeSwitchVent::setup() {
-    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); }, TAG);
+    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); });
 }
 
 void HCPBridgeSwitchVent::on_event_triggered() {
@@ -58,7 +58,7 @@ void HCPBridgeSwitchVent::write_state(bool state) {
 // Implementation for HCPBridgeSwitchHalf
 
 void HCPBridgeSwitchHalf::setup() {
-    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); }, TAG2);
+    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); });
 }
 
 void HCPBridgeSwitchHalf::on_event_triggered() {
