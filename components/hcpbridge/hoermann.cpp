@@ -139,19 +139,32 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
       return except(EX_ILLEGAL_VALUE);
 
     // --- Schritt 3: Schreibzugriffe uebernehmen ---
-    if (writeAddr < REG_CMD_BASE || (uint32_t)writeAddr + writeCnt > REG_CMD_BASE + REG_CMD_COUNT)
-      return except(EX_SLAVE_FAILURE);
+    // Wie setMultipleWords(): ein Schreibzugriff ausserhalb des Blocks kann
+    // nicht zurueckgelesen werden und scheitert - ausser der Wert ist 0, denn
+    // ein nicht vorhandenes Register liest sich als 0.
+    bool write_ok = true;
     for (uint16_t i = 0; i < writeCnt; i++)
     {
       const uint16_t val = rd16(wdata + 2 * i);
-      // Nur Register 0 hat eine Wirkung; die uebrigen Befehlsregister wurden
-      // frueher zwar abgelegt, aber nie wieder gelesen.
-      if (writeAddr + i == REG_CMD_BASE)
+      const uint32_t idx = (uint32_t)writeAddr + i - REG_CMD_BASE;
+      if (writeAddr + i < REG_CMD_BASE || idx >= REG_CMD_COUNT)
+      {
+        if (val != 0)
+          write_ok = false;
+        continue;
+      }
+      // Nur Register 0 hat eine Wirkung; die uebrigen wurden frueher zwar
+      // abgelegt, aber nie wieder gelesen.
+      if (idx == 0)
         this->onCounterWrite(val);
     }
+    if (!write_ok)
+      return except(EX_SLAVE_FAILURE);
 
     // --- Schritt 4: antworten ---
-    if (readAddr < REG_RESP_BASE || (uint32_t)readAddr + readCnt > REG_RESP_BASE + REG_RESP_COUNT)
+    // Wie readWords() ohne MODBUS_STRICT_REG: nur das erste Register muss
+    // existieren, ausserhalb des Blocks werden Nullen geliefert.
+    if (readAddr < REG_RESP_BASE || readAddr >= REG_RESP_BASE + REG_RESP_COUNT)
       return except(EX_ILLEGAL_ADDRESS);
     size_t n = 0;
     resp[n++] = req[0];
@@ -159,7 +172,8 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     resp[n++] = (uint8_t)(readCnt * 2);
     for (uint16_t i = 0; i < readCnt; i++)
     {
-      wr16(resp + n, this->regResp[readAddr + i - REG_RESP_BASE]);
+      const uint32_t idx = (uint32_t)readAddr + i - REG_RESP_BASE;
+      wr16(resp + n, idx < REG_RESP_COUNT ? this->regResp[idx] : 0x0000);
       n += 2;
     }
     return n;
