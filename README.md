@@ -12,6 +12,10 @@ This is a esphome-based adaption of the HCPBridge. thanks to [mapero](https://gi
 
 ### Example esphome configuration
 
+> The component talks to the drive through the ESP-IDF UART driver and needs
+> `framework: type: esp-idf`. It no longer pulls in an Arduino Modbus library,
+> which ESPHome disables in ESP32 builds since 2026.2 anyway.
+
 ```YAML
 substitutions:
   name: "hcpbridge"
@@ -19,10 +23,6 @@ substitutions:
 esphome:
   name: "${name}"
   friendly_name: "${friendly_name}"
-  libraries:
-    - emelianov/modbus-esp8266 # Required for communication with the modbus
-  platformio_options:
-    board_build.f_cpu: 240000000L
 
 external_components:
     source: github://14yannick/esphome-hcpbridge
@@ -30,8 +30,9 @@ external_components:
 
 esp32:
   board: #adafruit_feather_esp32s3 #set your board
+  cpu_frequency: 240MHZ
   framework:
-    type: arduino
+    type: esp-idf
 
 hcpbridge:
   id: hcpbridge_id
