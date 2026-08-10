@@ -45,7 +45,13 @@ void HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
 {
   this->mb.set_handler([this](const uint8_t *req, size_t len, uint8_t *resp) -> size_t
                        { return this->onFrame(req, len, resp); });
-  this->mb.begin(UART_NUM_2, rx, tx, rts, HCP_BAUD, SLAVE_ID);
+  if (!this->mb.begin(UART_NUM_2, rx, tx, rts, HCP_BAUD, SLAVE_ID))
+  {
+    // Ohne Schnittstelle keinen Task starten: er wuerde mit hoechster
+    // Prioritaet leer drehen, weil poll() sofort zurueckkehrt.
+    ESP_LOGE(TAG_HCI, "serial setup failed, bus task not started");
+    return;
+  }
 
   xTaskCreatePinnedToCore(
       modbusServeTask,          /* Function to implement the task */
@@ -143,10 +149,10 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     for (uint16_t i = 0; i < writeCnt; i++)
     {
       const uint16_t val = rd16(wdata + 2 * i);
-      const uint16_t idx = (uint16_t)(writeAddr + i - REG_CMD_BASE);
-      if (idx == 0)
+      // Nur Register 0 hat eine Wirkung; die uebrigen Befehlsregister wurden
+      // frueher zwar abgelegt, aber nie wieder gelesen.
+      if (writeAddr + i == REG_CMD_BASE)
         this->onCounterWrite(val);
-      this->regCmd[idx] = val;
     }
 
     // --- Schritt 4: antworten ---
@@ -201,7 +207,7 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     return n;
   }
 
-  this->state->debugMessage = "unknown function code";
+  this->state->debugMessage = "unknown function code";  // Zeiger auf Literal, keine Zuweisung auf dem Heap
   this->state->debMessage = true;
   ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
   return except(EX_ILLEGAL_FUNCTION);

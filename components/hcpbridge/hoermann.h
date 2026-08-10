@@ -3,7 +3,6 @@
 #ifndef HOERMANN_H_
 #define HOERMANN_H_
 #include <cstdint>
-#include <string>
 
 #include "modbus_rtu.h"
 
@@ -76,7 +75,7 @@ public:
     bool lightOn = false;
     bool relayOn = false;
     State state = CLOSED;
-    std::string debugMessage = "initial";
+    const char *debugMessage = "initial";  // nur Literale, damit der Bus-Task keinen Heap anfasst
     unsigned long lastModbusRespone = 0;
     bool changed = false;
     bool debMessage = false;
@@ -159,7 +158,6 @@ public:
 private:
     HoermannGarageEngine(){};
     esphome::hcpbridge::ModbusRtuServer mb;       // eigener RTU-Server, keine Fremdbibliothek
-    uint16_t regCmd[REG_CMD_COUNT] = {0};         // 0x9C41, vom Antrieb geschrieben
     uint16_t regBcast[REG_BCAST_COUNT] = {0};     // 0x9D31, Zustand des Antriebs
     uint16_t regResp[REG_RESP_COUNT] = {0};       // 0x9CB9, unsere Antwort
     const HoermannCommand *nextCommand = nullptr; // Next Command to transmit

@@ -67,6 +67,11 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
   // Stille-Erkennung ausloest und nicht ein halbvoller Puffer.
   uart_set_rx_full_threshold(this->port_, 120);
 
+  // Was waehrend des Hochlaufs auf der Leitung lag, ist kein gueltiges
+  // Telegramm und wuerde nur eine Pruefsummenwarnung erzeugen.
+  uart_flush_input(this->port_);
+  xQueueReset(this->queue_);
+
   ESP_LOGI(TAG, "RTU server on UART%d rx=%d tx=%d rts=%d %" PRIu32 " baud 8E1, slave id %u",
            static_cast<int>(this->port_), rx_pin, tx_pin, rts_pin, baud, this->slave_id_);
   return true;
