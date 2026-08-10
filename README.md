@@ -105,6 +105,18 @@ sensor:
     id: sensor_position
     name: ${sen_pos}
 ```
+
+With `type: target_position` the same platform reports where the door is
+heading instead of where it is. The drive sends both in one register, so this
+needs no extra traffic. Without `type` the sensor reports the current position
+as before.
+```YAML
+sensor:
+  - platform: hcpbridge
+    type: target_position
+    id: sensor_target_position
+    name: "Garage Door Target Position"
+```
 ### Button
 
 This component allows you to add three buttons to sond commands to the door.
