@@ -2,6 +2,12 @@
 
 #include "hoermann.h"
 
+#include "esphome/core/hal.h"
+#include "esphome/core/log.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 // arg1,arg4> command start value
 // arg2,arg5> command end   value
 const HoermannCommand HoermannCommand::STARTOPENDOOR = HoermannCommand(0x0210, 0x0110, 0x0000, 0x0000); // Typo 0201
@@ -25,7 +31,6 @@ void modbusServeTask(void *parameter)
   while (true)
   {
     HoermannGarageEngine::getInstance().handleModbus();
-    vTaskDelay(1);
   }
   vTaskDelete(NULL);
 }
@@ -38,105 +43,143 @@ HoermannGarageEngine &HoermannGarageEngine::getInstance()
 
 void HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
 {
-  RS485.begin(57600, SERIAL_8E1, rx, tx);
-  if (rts == -1) {
-    mb.begin(&RS485);
-  } else {
-    mb.begin(&RS485, rts, true);
-  }
-  mb.slave(SLAVE_ID);
+  this->mb.set_handler([this](const uint8_t *req, size_t len, uint8_t *resp) -> size_t
+                       { return this->onFrame(req, len, resp); });
+  this->mb.begin(UART_NUM_2, rx, tx, rts, HCP_BAUD, SLAVE_ID);
 
   xTaskCreatePinnedToCore(
-      modbusServeTask, /* Function to implement the task */
-      "ModBusTask",    /* Name of the task */
-      10000,           /* Stack size in words */
-      NULL,            /* Task input parameter */
-      // 1,  /* Priority of the task */
-      configMAX_PRIORITIES - 1,
-      &modBusTask, /* Task handle. */
-      1);          /* Core where the task should run */
-
-  // Required for Write
-  mb.addHreg(0x9C41, 0, 0x03); // Commands
-  mb.addHreg(0x9D31, 0, 0x09); // Broadcast
-  // For Read
-  mb.addHreg(0x9CB9, 0, 0x08); // Internal State (e.g. Button Pressed)
-
-  // on Request - Clear/Calc Response data
-  mb.onRequest([this](Modbus::FunctionCode fc, const Modbus::RequestData data) -> Modbus::ResultCode
-               { return this->onRequest(fc, data); });
-
-  // On Write (update counter in Read Registers)
-  mb.onSet(
-      HREG(0x9C41 + 0), [this](TRegister *reg, uint16_t val) -> uint16_t
-      { return this->onCounterWrite(reg, val); },
-      0x01);
-  // Broadcast Changes
-  mb.onSet(
-      HREG(0x9D31 + 2), [this](TRegister *reg, uint16_t val) -> uint16_t
-      { return this->onCurrentStateChanged(reg, val); },
-      0x01);
-  mb.onSet(
-      HREG(0x9D31 + 1), [this](TRegister *reg, uint16_t val) -> uint16_t
-      { return this->onDoorPositonChanged(reg, val); },
-      0x01);
-  mb.onSet(
-      HREG(0x9D31 + 6), [this](TRegister *reg, uint16_t val) -> uint16_t
-      { return this->onRegSevenChanged(reg, val); }, // Relay and Light state
-      0x01);
+      modbusServeTask,          /* Function to implement the task */
+      "ModBusTask",             /* Name of the task */
+      4096,                     /* Stack size in words */
+      NULL,                     /* Task input parameter */
+      configMAX_PRIORITIES - 1, /* Priority */
+      &modBusTask,              /* Task handle */
+      1);                       /* Core */
 }
 
 void HoermannGarageEngine::handleModbus()
 {
-  mb.task();
+  this->mb.poll();
 }
 
-Modbus::ResultCode HoermannGarageEngine::onRequest(Modbus::FunctionCode fc, const Modbus::RequestData data)
+static inline uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] << 8) | p[1]; }
+static inline void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)(v & 0xFF); }
+
+/**
+ * Beantwortet ein vollstaendiges Telegramm (ohne Pruefsumme).
+ *
+ * Reihenfolge wie in der frueheren Bibliothek: erst die Antwortregister mit
+ * den Vorgabewerten fuellen, dann die Schreibzugriffe des Antriebs anwenden
+ * (die veraendern 0x9CB9 noch), danach antworten.
+ */
+size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *resp)
 {
+  const uint8_t fc = req[1];
   this->state->recordModbusResponse();
 
-  // Command Requst (Internal State representation)
-  if (fc == Modbus::FC_READWRITE_REGS && data.regWrite.address == 0x9C41 && data.regWriteCount == 0x02 && data.regRead.address == 0x9CB9 && data.regReadCount == 0x08)
+  if (fc == 0x17 && len >= 11)
   {
-    mb.Reg(HREG(0x9CB9 + 0), (uint16_t)0x0000);
-    mb.Reg(HREG(0x9CB9 + 1), (uint16_t)0x0001);
-    setCommandValuesToRead();
-    // mb.Reg(HREG(0x9CB9+2),(uint16_t)0x0000);
-    // mb.Reg(HREG(0x9CB9+3),(uint16_t)0x0000);
-    mb.Reg(HREG(0x9CB9 + 4), (uint16_t)0x0000);
-    mb.Reg(HREG(0x9CB9 + 5), (uint16_t)0x0000);
-    mb.Reg(HREG(0x9CB9 + 6), (uint16_t)0x0000);
-    mb.Reg(HREG(0x9CB9 + 7), (uint16_t)0x0000);
+    const uint16_t readAddr = rd16(req + 2);
+    const uint16_t readCnt = rd16(req + 4);
+    const uint16_t writeAddr = rd16(req + 6);
+    const uint16_t writeCnt = rd16(req + 8);
+    const uint8_t byteCnt = req[10];
+    const uint8_t *wdata = req + 11;
+
+    if (writeAddr == REG_CMD_BASE && writeCnt == 0x02 && readAddr == REG_RESP_BASE && readCnt == 0x08)
+    {
+      this->regResp[0] = 0x0000;
+      this->regResp[1] = 0x0001;
+      setCommandValuesToRead();
+      this->regResp[4] = 0x0000;
+      this->regResp[5] = 0x0000;
+      this->regResp[6] = 0x0000;
+      this->regResp[7] = 0x0000;
+    }
+    else if (writeAddr == REG_CMD_BASE && writeCnt == 0x02 && readAddr == REG_RESP_BASE && readCnt == 0x02)
+    {
+      this->regResp[0] = 0x0004;
+      this->regResp[1] = 0x0000;
+      ESP_LOGD(TAG_HCI, "executing empty command");
+    }
+    else if (writeAddr == REG_CMD_BASE && writeCnt == 0x03 && readAddr == REG_RESP_BASE && readCnt == 0x05)
+    {
+      ESP_LOGD(TAG_HCI, "executing busscan");
+      this->regResp[0] = 0x0000;
+      this->regResp[1] = 0x0005;
+      this->regResp[2] = 0x0430;
+      this->regResp[3] = 0x10ff;
+      this->regResp[4] = 0xa845;
+    }
+    else
+    {
+      ESP_LOGW(TAG_HCI, "unexpected 0x17 read=%04x/%u write=%04x/%u", readAddr, readCnt, writeAddr, writeCnt);
+    }
+
+    // Schreibzugriffe uebernehmen
+    for (uint16_t i = 0; i < writeCnt && (11 + 2 * i + 1) < len && 2 * i + 1 < byteCnt; i++)
+    {
+      const uint16_t val = rd16(wdata + 2 * i);
+      const uint16_t idx = (uint16_t)(writeAddr + i - REG_CMD_BASE);
+      if (idx < REG_CMD_COUNT)
+      {
+        if (idx == 0)
+          this->onCounterWrite(val);
+        this->regCmd[idx] = val;
+      }
+    }
+
+    // Antwort zusammensetzen
+    size_t n = 0;
+    resp[n++] = req[0];
+    resp[n++] = fc;
+    resp[n++] = (uint8_t)(readCnt * 2);
+    for (uint16_t i = 0; i < readCnt; i++)
+    {
+      const uint16_t idx = (uint16_t)(readAddr + i - REG_RESP_BASE);
+      wr16(resp + n, idx < REG_RESP_COUNT ? this->regResp[idx] : 0x0000);
+      n += 2;
+    }
+    this->state->setValid(true);
+    return n;
   }
-  // Empty Command Requst
-  else if (fc == Modbus::FC_READWRITE_REGS && data.regWrite.address == 0x9C41 && data.regWriteCount == 0x02 && data.regRead.address == 0x9CB9 && data.regReadCount == 0x02)
+
+  if (fc == 0x10 && len >= 7)
   {
-    mb.Reg(HREG(0x9CB9 + 0), (uint16_t)0x0004);
-    mb.Reg(HREG(0x9CB9 + 1), (uint16_t)0x0000);
-    ESP_LOGD(TAG_HCI, "executing empty command");
+    const uint16_t addr = rd16(req + 2);
+    const uint16_t cnt = rd16(req + 4);
+    const uint8_t byteCnt = req[6];
+    const uint8_t *wdata = req + 7;
+
+    for (uint16_t i = 0; i < cnt && (7 + 2 * i + 1) < len && 2 * i + 1 < byteCnt; i++)
+    {
+      const uint16_t val = rd16(wdata + 2 * i);
+      const uint16_t idx = (uint16_t)(addr + i - REG_BCAST_BASE);
+      if (idx >= REG_BCAST_COUNT)
+        continue;
+      const uint16_t old = this->regBcast[idx];
+      if (idx == 1)
+        this->onDoorPositonChanged(old, val);
+      else if (idx == 2)
+        this->onCurrentStateChanged(old, val);
+      else if (idx == 6)
+        this->onRegSevenChanged(old, val);
+      this->regBcast[idx] = val;
+    }
+
+    this->state->setValid(true);
+    size_t n = 0;
+    resp[n++] = req[0];
+    resp[n++] = fc;
+    wr16(resp + n, addr); n += 2;
+    wr16(resp + n, cnt); n += 2;
+    return n;
   }
-  // BusScan
-  else if (fc == Modbus::FC_READWRITE_REGS && data.regWrite.address == 0x9C41 && data.regWriteCount == 0x03 && data.regRead.address == 0x9CB9 && data.regReadCount == 0x05)
-  {
-    ESP_LOGD(TAG_HCI, "executing busscan");
-    mb.Reg(HREG(0x9CB9 + 0), (uint16_t)0x0000);
-    mb.Reg(HREG(0x9CB9 + 1), (uint16_t)0x0005);
-    mb.Reg(HREG(0x9CB9 + 2), (uint16_t)0x0430);
-    mb.Reg(HREG(0x9CB9 + 3), (uint16_t)0x10ff);
-    mb.Reg(HREG(0x9CB9 + 4), (uint16_t)0xa845);
-  }
-  else if (fc == Modbus::FC_WRITE_REGS && data.reg.address == 0x9D31)
-  {
-    // ESP_LOGD("ON_REQ", "on Status Update (cnt: %d)",data.regCount);
-  }
-  else
-  {
-    this->state->debugMessage = "unknown function code fc=" + fc;
-    this->state->debMessage = true;
-    ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
-  }
-  this->state->setValid(true);
-  return Modbus::EX_SUCCESS;
+
+  this->state->debugMessage = "unknown function code";
+  this->state->debMessage = true;
+  ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
+  return 0;
 }
 
 void HoermannGarageEngine::setCommandValuesToRead()
@@ -154,10 +197,10 @@ void HoermannGarageEngine::setCommandValuesToRead()
       regPlug2Value = nextCommand->commandRegPlus2Value;
       regPlug3Value = nextCommand->commandRegPlus3Value;
       ESP_LOGI(TAG_HCI, "command start %x %x", regPlug2Value, regPlug3Value);
-      commandWrittenOn = millis();
+      commandWrittenOn = esphome::millis();
       // It was written and it can be cleared
     }
-    else if (commandWrittenOn != 0 && (commandWrittenOn + SIMULATEKEYPRESSDELAYMS) < millis())
+    else if (commandWrittenOn != 0 && (commandWrittenOn + SIMULATEKEYPRESSDELAYMS) < esphome::millis())
     {
       regPlug2Value = nextCommand->commandEndPlus2Value;
       regPlug3Value = nextCommand->commandEndPlus3Value;
@@ -167,14 +210,14 @@ void HoermannGarageEngine::setCommandValuesToRead()
       nextCommand = nullptr;
     }
   }
-  mb.Reg(HREG(0x9CB9 + 2), regPlug2Value);
-  mb.Reg(HREG(0x9CB9 + 3), regPlug3Value);
+  this->regResp[2] = regPlug2Value;
+  this->regResp[3] = regPlug3Value;
 }
 
-uint16_t HoermannGarageEngine::onDoorPositonChanged(TRegister *reg, uint16_t val)
+void HoermannGarageEngine::onDoorPositonChanged(uint16_t oldVal, uint16_t val)
 {
   // on First Byte changed (current)
-  if ((reg->value & 0x00FF) != (val & 0x00FF))
+  if ((oldVal & 0x00FF) != (val & 0x00FF))
   {
     this->state->setCurrentPosition((float)(val & 0x00FF) / 200.0f);
     if ((this->state->gotoPosition > 0.0f && this->state->state == HoermannState::State::CLOSING && this->state->gotoPosition >= this->state->currentPosition) ||
@@ -185,20 +228,18 @@ uint16_t HoermannGarageEngine::onDoorPositonChanged(TRegister *reg, uint16_t val
     }
   }
   // on Second Byte changed (target)
-  if ((reg->value & 0xFF00) != (val & 0xFF00))
+  if ((oldVal & 0xFF00) != (val & 0xFF00))
   {
     this->state->setTargetPosition((float)((val & 0xFF00) >> 8) / 200.0f);
   }
-
-  return val;
 }
 
-uint16_t HoermannGarageEngine::onCurrentStateChanged(TRegister *reg, uint16_t val)
+void HoermannGarageEngine::onCurrentStateChanged(uint16_t oldVal, uint16_t val)
 {
   // on First Byte changed
-  if ((reg->value & 0xFF00) != (val & 0xFF00))
+  if ((oldVal & 0xFF00) != (val & 0xFF00))
   {
-    ESP_LOGI(TAG_HCI, "onCurrentStateChanged. address=%x, value=%x (actual: %x)", reg->address.address, val, (val & 0xFF00) >> 8);
+    ESP_LOGI(TAG_HCI, "onCurrentStateChanged. address=%x, value=%x (actual: %x)", REG_BCAST_BASE + 2, val, (val & 0xFF00) >> 8);
 
     switch ((val & 0xFF00) >> 8)
     {
@@ -238,10 +279,9 @@ uint16_t HoermannGarageEngine::onCurrentStateChanged(TRegister *reg, uint16_t va
       ESP_LOGW(TAG_HCI, "unknown State %x", (val & 0xFF00) >> 8);
     }
   }
-  return val;
 }
 
-uint16_t HoermannGarageEngine::onRegSevenChanged(TRegister *reg, uint16_t val)
+void HoermannGarageEngine::onRegSevenChanged(uint16_t oldVal, uint16_t val)
   //Observed Values, last bit 4 is assumed could not be tested as I have no UAP HCP.
   //0x00 0x00 Relay off - Light off
   //0x02 0x00 Relay on  - light off
@@ -251,30 +291,28 @@ uint16_t HoermannGarageEngine::onRegSevenChanged(TRegister *reg, uint16_t val)
   //0x00 0x04 Relay on  - light off
 
 {
-  if ((reg->value & 0xFF00) != (val & 0xFF00)){
+  if ((oldVal & 0xFF00) != (val & 0xFF00)){
     // 0x02 happen when relay menu 30 is set to 06, 07, 10 
     this->state->setRelayOn((val & 0xFF00) >> 8 == 0x02);
   }
   // On second byte changed
-  if ((reg->value & 0x00FF) != (val & 0x00FF))
+  if ((oldVal & 0x00FF) != (val & 0x00FF))
   {
-    ESP_LOGI(TAG_HCI, "onRegSixChanged. address=%x, value=%x", reg->address.address, val);
+    ESP_LOGI(TAG_HCI, "onRegSixChanged. address=%x, value=%x", REG_BCAST_BASE + 6, val);
     this->state->setLigthOn((val & 0x00FF) == 0x14 || (val & 0x00FF) == 0x10);
-    this->state->setRelayOn((val & 0xFF00) >> 8 == 0x02 || (val & 0x00FF) == 0x14 || (val & 0x00FF) == 0x04); 
+    this->state->setRelayOn((val & 0xFF00) >> 8 == 0x02 || (val & 0x00FF) == 0x14 || (val & 0x00FF) == 0x04);
   }
-  return val;
 }
 
 /**
  * Write on 0x9C41 , byte1: counter, byte2: command
  */
-uint16_t HoermannGarageEngine::onCounterWrite(TRegister *reg, uint16_t val)
+void HoermannGarageEngine::onCounterWrite(uint16_t val)
 {
   uint16_t counter = val & 0xFF00;
   uint16_t command = (val & 0x00FF) << 8;
-  mb.Reg(HREG(0x9CB9 + 0), mb.Reg(HREG(0x9CB9 + 0)) | counter);
-  mb.Reg(HREG(0x9CB9 + 1), mb.Reg(HREG(0x9CB9 + 1)) | command);
-  return val;
+  this->regResp[0] |= counter;
+  this->regResp[1] |= command;
 }
 
 /**
@@ -376,7 +414,7 @@ void HoermannState::setRelayOn(bool relayOn)
 }
 void HoermannState::recordModbusResponse()
 {
-  this->lastModbusRespone = millis();
+  this->lastModbusRespone = esphome::millis();
 }
 void HoermannState::clearChanged()
 {
@@ -393,7 +431,7 @@ long HoermannState::responseAge()
   {
     return -1;
   }
-  long diff = millis() - lastModbusRespone;
+  long diff = esphome::millis() - lastModbusRespone;
   if (diff < 0)
   {
     return -2;

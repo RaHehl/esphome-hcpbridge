@@ -1,5 +1,7 @@
 #include "hcpbridge.h"
 
+#include <cinttypes>
+
 namespace esphome {
 namespace hcpbridge {
 
@@ -17,7 +19,7 @@ void HCPBridge::add_on_state_callback(std::function<void()> &&callback, const ch
     auto start = millis();
     callback();
     auto end = millis();
-    ESP_LOGD(TAG, "Callback executed in %u ms [Tag: %s]", end - start, tag);
+    ESP_LOGD(TAG, "Callback executed in %" PRIu32 " ms [Tag: %s]", (uint32_t)(end - start), tag);
   };
   this->state_callback_.add(std::move(wrapped_callback));
 }

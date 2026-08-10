@@ -2,18 +2,16 @@
 
 #ifndef HOERMANN_H_
 #define HOERMANN_H_
-#define MODBUSRTU_DEBUG 1
+#include <cstdint>
+#include <string>
 
-#include <Arduino.h>
-#include <Stream.h>
-
-#include "ModbusRTU.h"
+#include "modbus_rtu.h"
 
 #define SLAVE_ID 2
+#define HCP_BAUD 57600
 #define SIMULATEKEYPRESSDELAYMS 100
 #define DEADREPORTTIMEOUT 60000
 
-#define RS485 Serial2
 #ifdef CONFIG_IDF_TARGET_ESP32S3
 #define PIN_TXD 17
 #define PIN_RXD 18
@@ -78,7 +76,7 @@ public:
     bool lightOn = false;
     bool relayOn = false;
     State state = CLOSED;
-    String debugMessage = "initial";
+    std::string debugMessage = "initial";
     unsigned long lastModbusRespone = 0;
     bool changed = false;
     bool debMessage = false;
@@ -99,6 +97,15 @@ public:
 
 };
 
+// Registerbereiche des Hoermann-Busses. Der Antrieb schreibt Befehle nach
+// 0x9C41 und seinen Zustand nach 0x9D31, und liest unsere Antwort aus 0x9CB9.
+#define REG_CMD_BASE 0x9C41
+#define REG_CMD_COUNT 3
+#define REG_BCAST_BASE 0x9D31
+#define REG_BCAST_COUNT 9
+#define REG_RESP_BASE 0x9CB9
+#define REG_RESP_COUNT 8
+
 class HoermannGarageEngine
 {
 public:
@@ -108,16 +115,20 @@ public:
 
     void setup(int8_t rx, int8_t tx, int8_t rts);
     void handleModbus();
-    Modbus::ResultCode onRequest(Modbus::FunctionCode fc, const Modbus::RequestData data);
+
+    // Beantwortet ein vollstaendiges Telegramm; liefert die Antwortlaenge
+    // oder 0, wenn geschwiegen werden soll.
+    size_t onFrame(const uint8_t *req, size_t len, uint8_t *resp);
+
     void setCommandValuesToRead();
-    uint16_t onDoorPositonChanged(TRegister *reg, uint16_t val);
-    uint16_t onCurrentStateChanged(TRegister *reg, uint16_t val);
-    uint16_t onRegSevenChanged(TRegister *reg, uint16_t val);
+    void onDoorPositonChanged(uint16_t oldVal, uint16_t val);
+    void onCurrentStateChanged(uint16_t oldVal, uint16_t val);
+    void onRegSevenChanged(uint16_t oldVal, uint16_t val);
 
     /**
      * Write on 0x9C41 , byte1: counter, byte2: command
      */
-    uint16_t onCounterWrite(TRegister *reg, uint16_t val);
+    void onCounterWrite(uint16_t val);
 
     /**
      * Helper to set next Command and *not* skip Current Command before end was sent
@@ -139,7 +150,10 @@ public:
 
 private:
     HoermannGarageEngine(){};
-    ModbusRTU mb;                                 // ModbusRTU instance, the man behind the curtain
+    esphome::hcpbridge::ModbusRtuServer mb;       // eigener RTU-Server, keine Fremdbibliothek
+    uint16_t regCmd[REG_CMD_COUNT] = {0};         // 0x9C41, vom Antrieb geschrieben
+    uint16_t regBcast[REG_BCAST_COUNT] = {0};     // 0x9D31, Zustand des Antriebs
+    uint16_t regResp[REG_RESP_COUNT] = {0};       // 0x9CB9, unsere Antwort
     const HoermannCommand *nextCommand = nullptr; // Next Command to transmit
     unsigned long commandWrittenOn = 0;           // When was last command written (wait 100ms before end of command is transmitted)
 };
