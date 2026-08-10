@@ -503,7 +503,7 @@ void HoermannGarageEngine::onCounterWrite(uint16_t val)
 /**
  * Helper to set next Command and *not* skip Current Command before end was sent
  */
-void HoermannGarageEngine::setCommand(bool cond, const HoermannCommand *command)
+bool HoermannGarageEngine::setCommand(bool cond, const HoermannCommand *command)
 {
   if (cond)
   {
@@ -513,62 +513,64 @@ void HoermannGarageEngine::setCommand(bool cond, const HoermannCommand *command)
     if (!this->nextCommand.compare_exchange_strong(expected, command))
     {
       ESP_LOGW(TAG_HCI, "Last Command was not yet fetched by modbus!");
+      return false;
     }
   }
+  return true;
 }
 
 /**
  * Control Functions
  */
-void HoermannGarageEngine::stopDoor()
+bool HoermannGarageEngine::stopDoor()
 {
   //only send impulse if door is in a moving state
-  setCommand( this->state->state == HoermannState::State::CLOSING || 
+  return setCommand( this->state->state == HoermannState::State::CLOSING || 
               this->state->state == HoermannState::State::OPENING ||
               this->state->state == HoermannState::State::MOVE_HALF ||
               this->state->state == HoermannState::State::MOVE_VENTING , &HoermannCommand::STARTIMPULSE);
 }
-void HoermannGarageEngine::closeDoor()
+bool HoermannGarageEngine::closeDoor()
 {
-  setCommand(true, &HoermannCommand::STARTCLOSEDOOR);
+  return setCommand(true, &HoermannCommand::STARTCLOSEDOOR);
 }
-void HoermannGarageEngine::openDoor()
+bool HoermannGarageEngine::openDoor()
 {
-  setCommand(true, &HoermannCommand::STARTOPENDOOR);
+  return setCommand(true, &HoermannCommand::STARTOPENDOOR);
 }
-void HoermannGarageEngine::impulseDoor()
+bool HoermannGarageEngine::impulseDoor()
 {
-  setCommand(true, &HoermannCommand::STARTIMPULSE);
+  return setCommand(true, &HoermannCommand::STARTIMPULSE);
 }
-void HoermannGarageEngine::halfPositionDoor()
+bool HoermannGarageEngine::halfPositionDoor()
 {
-  setCommand(true, &HoermannCommand::STARTOPENDOORHALF);
+  return setCommand(true, &HoermannCommand::STARTOPENDOORHALF);
 }
-void HoermannGarageEngine::ventilationPositionDoor()
+bool HoermannGarageEngine::ventilationPositionDoor()
 {
-  setCommand(true, &HoermannCommand::STARTVENTPOSITION);
+  return setCommand(true, &HoermannCommand::STARTVENTPOSITION);
 }
-void HoermannGarageEngine::turnLight(bool on)
+bool HoermannGarageEngine::turnLight(bool on)
 {
-  setCommand((on && !this->state->lightOn) || (!on && this->state->lightOn), &HoermannCommand::STARTTOGGLELAMP);
+  return setCommand((on && !this->state->lightOn) || (!on && this->state->lightOn), &HoermannCommand::STARTTOGGLELAMP);
 }
-void HoermannGarageEngine::toggleLight()
+bool HoermannGarageEngine::toggleLight()
 {
-  setCommand(true, &HoermannCommand::STARTTOGGLELAMP);
+  return setCommand(true, &HoermannCommand::STARTTOGGLELAMP);
 }
-void HoermannGarageEngine::setPosition(int setPosition)
+bool HoermannGarageEngine::setPosition(int setPosition)
 {
   // First and last movement segments seem a bit inconsistent on Promatic4, so it's better to leave it to fully open or close.
   if (setPosition <= 5)
-    closeDoor();
-  else if (setPosition >= 95)
-    openDoor();
-  else if ((setPosition > 5) && (setPosition < 95))
-  {
-    this->state->setGotoPosition(static_cast<float>(setPosition) / 100.0f);
-    setCommand(this->state->currentPosition < this->state->gotoPosition, &HoermannCommand::STARTOPENDOOR);
-    setCommand(this->state->currentPosition > this->state->gotoPosition, &HoermannCommand::STARTCLOSEDOOR);
-  }
+    return closeDoor();
+  if (setPosition >= 95)
+    return openDoor();
+  this->state->setGotoPosition(static_cast<float>(setPosition) / 100.0f);
+  if (this->state->currentPosition < this->state->gotoPosition)
+    return setCommand(true, &HoermannCommand::STARTOPENDOOR);
+  if (this->state->currentPosition > this->state->gotoPosition)
+    return setCommand(true, &HoermannCommand::STARTCLOSEDOOR);
+  return true;  // already there
 }
 
 void HoermannState::setTargetPosition(float targetPosition)

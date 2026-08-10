@@ -7,17 +7,20 @@ static const char *const TAG = "hcpbridge.button";
 
 void HCPBridgeButtonVent::press_action() {
   ESP_LOGD(TAG, "HCPBridgeButtonVent::press_action() - Triggering vent position");
-  this->parent_->engine->ventilationPositionDoor();
+  if (!this->parent_->engine->ventilationPositionDoor())
+    ESP_LOGW(TAG, "command dropped, the drive has not fetched the previous one yet");
 }
 
 void HCPBridgeButtonHalf::press_action() {
   ESP_LOGD(TAG, "HCPBridgeButtonHalf::press_action() - Triggering half-open position");
-  this->parent_->engine->halfPositionDoor();
+  if (!this->parent_->engine->halfPositionDoor())
+    ESP_LOGW(TAG, "command dropped, the drive has not fetched the previous one yet");
 }
 
 void HCPBridgeButtonImpulse::press_action() {
   ESP_LOGD(TAG, "HCPBridgeButtonImpulse::press_action() - Triggering impulse action");
-  this->parent_->engine->impulseDoor();
+  if (!this->parent_->engine->impulseDoor())
+    ESP_LOGW(TAG, "command dropped, the drive has not fetched the previous one yet");
 }
 
 }  // namespace hcpbridge
