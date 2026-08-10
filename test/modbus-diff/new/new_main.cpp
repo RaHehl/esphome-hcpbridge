@@ -12,8 +12,9 @@ namespace esphome { unsigned long millis() { return g_millis; } }
 // Faehrt den ECHTEN Produktivpfad: Bytes in die Schnittstelle, poll() laufen
 // lassen, gesendete Bytes einsammeln.
 int exchange_new(HoermannGarageEngine &e, const uint8_t *adu, size_t n, uint8_t *out) {
-  g_uart.feed(adu, n);
-  e.mb.poll(0);
+  const char *cs = getenv("CHUNK");
+  if (cs) g_uart.feed_chunks(adu, n, (size_t)atoi(cs)); else g_uart.feed(adu, n);
+  for (int i = 0; i < 20; i++) e.mb.poll(0);   // Bus-Task ruft poll() in Schleife
   if (g_uart.tx_len == 0) return -1;
   memcpy(out, g_uart.tx, g_uart.tx_len);
   return (int)g_uart.tx_len;

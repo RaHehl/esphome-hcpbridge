@@ -35,9 +35,8 @@ inline int uart_write_bytes(uart_port_t,const char*d,size_t n){
 inline esp_err_t uart_wait_tx_done(uart_port_t,TickType_t){return 0;}
 // muss nach der Ereignisstruktur stehen
 inline int xQueueReceive(QueueHandle_t, void *out, TickType_t) {
-  if (!g_uart.pending) return 0;
-  g_uart.pending = 0;
+  if (g_uart.ev_i >= g_uart.ev_n) return 0;
   uart_event_t *e = (uart_event_t *)out;
-  e->type = UART_DATA; e->size = g_uart.pending_size;
+  e->type = UART_DATA; e->size = g_uart.ev[g_uart.ev_i++];
   return 1;  // pdTRUE
 }

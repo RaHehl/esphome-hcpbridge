@@ -8,6 +8,7 @@
 set -e
 cd "$(dirname "$0")"
 PRE=${PRE:-f8a6440^}   # letzter Commit mit der Arduino-Bibliothek
+rm -f ./*.o          # sonst koennen veraltete Objektdateien mit geaenderten Strukturen mitlaufen
 [ -d mbesp ] || git clone -q --depth 1 https://github.com/emelianov/modbus-esp8266.git mbesp
 git -C ../.. show "$PRE:components/hcpbridge/hoermann.h"   > old/hoermann.h
 git -C ../.. show "$PRE:components/hcpbridge/hoermann.cpp" > old/orig_hoermann.cpp
@@ -44,6 +45,13 @@ vergleiche() {
 }
 # 2) vollstaendige Telegramme aller Funktionscodes, eigene und fremde Adresse
 vergleiche gen2.py frames2.txt "Funktionscodes"
+# 2b) Dasselbe, aber vom Treiber an der Puffermarke gestueckelt gemeldet.
+#     So kommen Telegramme ueber RX_FULL_THRESHOLD Byte real an.
+CHUNK=120 ./new_bin < frames2.txt > o_neu.txt
+n=$(paste -d'|' o_alt.txt o_neu.txt | awk -F'|' '$1!=$2' | wc -l | tr -d ' ')
+echo "Funktionscodes, an der Puffermarke gestueckelt: $n Abweichung(en)"
+[ "$n" = "0" ] || { diff o_alt.txt o_neu.txt | head -10; exit 1; }
+
 # 3) Befehlsstrecke: nextCommand plus Zeitspruenge um die 100-ms-Schwelle
 vergleiche gen4.py frames4.txt "Befehle"
 

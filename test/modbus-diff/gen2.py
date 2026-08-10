@@ -25,7 +25,7 @@ for i in range(300):
 # vollstaendige Telegramme aller Funktionscodes: Laenge deckt immer die angekuendigte Byteanzahl
 for it in range(30000):
     sl=random.choice(SL); fc=random.choice([0x17,0x10,0x03,0x06,0x16,0x01,0x02,0x04,0x05,0x0F,0x08,0x2B,0x41,0x80,0x83,0x90,0xAF,0xDC,0xF0,0xFF,random.getrandbits(8)])
-    a=random.choice(A); c1=random.choice([0,1,2,3,4,5,8,9,0x7D,0x7E])
+    a=random.choice(A); c1=random.choice([0,1,2,3,4,5,8,9,20,40,60,100,120,0x7D,0x7E])
     if fc==0x17:
         wa=random.choice(A); wc=random.choice([0,1,2,3,4,9])
         bc=random.choice([2*wc, 2*wc, (2*wc+2)&0xFF])

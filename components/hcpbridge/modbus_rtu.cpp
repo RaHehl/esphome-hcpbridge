@@ -75,7 +75,7 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
   uart_set_rx_timeout(this->port_, static_cast<uint8_t>(symbols));
   // Schwelle hoch setzen, damit bei den kurzen HCP-Telegrammen immer die
   // Stille-Erkennung ausloest und nicht ein halbvoller Puffer.
-  uart_set_rx_full_threshold(this->port_, 120);
+  uart_set_rx_full_threshold(this->port_, RX_FULL_THRESHOLD);
 
   // Was waehrend des Hochlaufs auf der Leitung lag, ist kein gueltiges
   // Telegramm und wuerde nur eine Pruefsummenwarnung erzeugen.
@@ -112,6 +112,22 @@ void ModbusRtuServer::poll(uint32_t timeout_ms) {
     return;
 
   size_t n = static_cast<size_t>(len);
+  // Der Treiber meldet nicht nur die Sendepause, sondern auch den vollen
+  // Empfangspuffer. Ein Telegramm ueber RX_FULL_THRESHOLD Byte kaeme deshalb
+  // in Stuecken an, und jedes Stueck waere fuer sich unbrauchbar. Nur dann
+  // lesen wir nach, bis die Leitung still ist. Kurze Telegramme - und das sind
+  // alle, die der Antrieb sendet - laufen unveraendert und ohne Zusatzwartezeit
+  // durch.
+  while (n >= RX_FULL_THRESHOLD && n < sizeof(this->rx_buf_)) {
+    int more = uart_read_bytes(this->port_, this->rx_buf_ + n, sizeof(this->rx_buf_) - n,
+                               pdMS_TO_TICKS(3));
+    if (more <= 0)
+      break;
+    n += static_cast<size_t>(more);
+  }
+  if (n < 4)
+    return;
+
   uint16_t got = static_cast<uint16_t>(this->rx_buf_[n - 2]) |
                  (static_cast<uint16_t>(this->rx_buf_[n - 1]) << 8);
   uint16_t want = crc16(this->rx_buf_, n - 2);

@@ -23,6 +23,10 @@ namespace hcpbridge {
 
 static constexpr size_t MODBUS_MAX_FRAME = 256;
 
+// Puffermarke des Treibers. Ab hier kann ein Telegramm gestueckelt gemeldet
+// werden, siehe poll().
+static const int RX_FULL_THRESHOLD = 120;
+
 class ModbusRtuServer {
  public:
   // Called with the complete request (without CRC). Returns the number of
