@@ -75,7 +75,6 @@ static inline void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1]
 size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *resp)
 {
   const uint8_t fc = req[1];
-  this->state->recordModbusResponse();
 
   // Ausnahmeantwort im Modbus-Format: Adresse, Funktionscode mit gesetztem
   // hoechsten Bit, Fehlercode.
@@ -89,6 +88,9 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
 
   if (fc == 0x17 && len >= 11)
   {
+    // Wie zuvor: die Bibliothek rief den Rueckruf nur fuer Telegramme auf,
+    // die sie selbst behandelt, und dort vor jeder Pruefung.
+    this->state->recordModbusResponse();
     const uint16_t readAddr = rd16(req + 2);
     const uint16_t readCnt = rd16(req + 4);
     const uint16_t writeAddr = rd16(req + 6);
@@ -127,6 +129,8 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
       ESP_LOGW(TAG_HCI, "unexpected 0x17 read=%04x/%u write=%04x/%u", readAddr, readCnt, writeAddr, writeCnt);
     }
 
+    this->state->setValid(true);
+
     // --- Schritt 2: dieselben Pruefungen wie die fruehere Bibliothek ---
     if (readCnt < 1 || readCnt > MODBUS_MAX_WORDS || writeCnt < 1 || writeCnt > MODBUS_MAX_WORDS ||
         (0xFFFF - readAddr) < readCnt || (0xFFFF - writeAddr) < writeCnt || byteCnt != 2 * writeCnt ||
@@ -157,17 +161,18 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
       wr16(resp + n, this->regResp[readAddr + i - REG_RESP_BASE]);
       n += 2;
     }
-    this->state->setValid(true);
     return n;
   }
 
   if (fc == 0x10 && len >= 7)
   {
+    this->state->recordModbusResponse();
     const uint16_t addr = rd16(req + 2);
     const uint16_t cnt = rd16(req + 4);
     const uint8_t byteCnt = req[6];
     const uint8_t *wdata = req + 7;
 
+    this->state->setValid(true);
     if (cnt < 1 || cnt > MODBUS_MAX_WORDS || (0xFFFF - addr) < cnt || byteCnt != 2 * cnt ||
         len < (size_t)(7 + byteCnt))
       return except(EX_ILLEGAL_VALUE);
@@ -188,7 +193,6 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
       this->regBcast[idx] = val;
     }
 
-    this->state->setValid(true);
     size_t n = 0;
     resp[n++] = req[0];
     resp[n++] = fc;

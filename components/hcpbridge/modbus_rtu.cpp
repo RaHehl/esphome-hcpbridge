@@ -33,8 +33,10 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
   cfg.data_bits = UART_DATA_8_BITS;
   cfg.parity = UART_PARITY_EVEN;   // the drive uses 8E1
   cfg.stop_bits = UART_STOP_BITS_1;
-  cfg.flow_ctrl = rts_pin >= 0 ? UART_HW_FLOWCTRL_RTS : UART_HW_FLOWCTRL_DISABLE;
-  cfg.rx_flow_ctrl_thresh = 122;
+  // Immer ohne Hardware-Flusssteuerung: im RS485-Halbduplexbetrieb steuert
+  // der Treiber die Senderichtung selbst, beides gleichzeitig widerspricht sich.
+  cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+  cfg.rx_flow_ctrl_thresh = 0;
   cfg.source_clk = UART_SCLK_DEFAULT;
 
   if (uart_param_config(this->port_, &cfg) != ESP_OK) {
@@ -82,10 +84,15 @@ void ModbusRtuServer::poll(uint32_t timeout_ms) {
     xQueueReset(this->queue_);
     return;
   }
-  if (ev.type != UART_DATA)
+  if (ev.type != UART_DATA) {
+    // Paritaets- und Rahmenfehler: die betroffenen Bytes bleiben sonst im
+    // Puffer stehen und verschieben alle folgenden Telegramme.
+    ESP_LOGW(TAG, "uart event %d, flushing", static_cast<int>(ev.type));
+    uart_flush_input(this->port_);
     return;
+  }
   size_t to_read = ev.size > sizeof(this->rx_buf_) ? sizeof(this->rx_buf_) : ev.size;
-  int len = uart_read_bytes(this->port_, this->rx_buf_, to_read, 0);
+  int len = uart_read_bytes(this->port_, this->rx_buf_, to_read, pdMS_TO_TICKS(2));
   if (len < 4)  // address + function + CRC is the shortest possible frame
     return;
 
