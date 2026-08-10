@@ -324,6 +324,22 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     return echo();
   }
 
+  if (fc == 0x14 || fc == 0x15)  // Dateisaetze lesen bzw. schreiben
+  {
+    // Einziger Fall ohne den onRequest-Rueckruf: die Bibliothek sprang hier
+    // direkt in die Pruefung. Also kein recordModbusResponse, kein setValid,
+    // keine Fehlermeldung.
+    const uint8_t n = len >= 3 ? req[2] : 0;  // Laengenbyte der Anfrage
+    const uint8_t lo = fc == 0x14 ? 0x07 : 0x09;
+    const uint8_t hi = fc == 0x14 ? 0xF5 : 0xFB;
+    if (n < lo || n > hi)
+      return except(EX_ILLEGAL_VALUE);
+    // Ein Dateibehandler war nie eingetragen. Die Bibliothek lief dann durch
+    // ihre Satzschleife und endete ausnahmslos hier, unabhaengig vom Inhalt -
+    // deshalb ist das exakt nachbildbar, ohne ihre Lesefehler mitzunehmen.
+    return except(EX_ILLEGAL_ADDRESS);
+  }
+
   // Spulen, Eingangsstatus und Eingangsregister gab es nie. Die Bibliothek
   // bediente diese Funktionscodes zwar, kam aber immer bei derselben Ausnahme
   // heraus, weil die Registersuche scheiterte.

@@ -25,11 +25,11 @@ int main() {
     size_t n = 0;
     for (size_t i = 0; i + 1 < line.size(); i += 2)
       req[n++] = (uint8_t)strtol(line.substr(i, 2).c_str(), nullptr, 16);
-    int r = e.mb.exchange(req, n, resp);
+    extern int old_exchange(ModbusRTU &, const uint8_t *, size_t, uint8_t *);
+    int r = old_exchange(e.mb, req, n, resp);
     printf("R:");
     if (r < 0) printf("-");
-    else { for (int i = 0; i < r; i++) printf("%02x", resp[i]);
-           uint16_t c = mbcrc(resp, r); printf("%02x%02x", c & 0xFF, c >> 8); }
+    else { for (int i = 0; i < r; i++) printf("%02x", resp[i]); }
     printf(" G:");
     for (int i=0;i<3;i++) printf("%04x", e.mb.Hreg(0x9C41+i));
     for (int i=0;i<9;i++) printf("%04x", e.mb.Hreg(0x9D31+i));

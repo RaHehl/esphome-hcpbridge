@@ -16,10 +16,11 @@ cp ../../components/hcpbridge/hoermann.h ../../components/hcpbridge/hoermann.cpp
 
 D="-std=gnu++17 -DMODBUS_USE_STL -I stub -I mbesp/src -I old -I ."
 g++ $D -c mbesp/src/Modbus.cpp -o Modbus.o
+g++ $D -c mbesp/src/ModbusRTU.cpp -o ModbusRTU.o
 g++ $D -c old/orig_hoermann.cpp -o orig_hoermann.o
 g++ $D -c old/old_side.cpp -o old_side.o
 g++ $D -c old/old_main.cpp  -o old_main.o
-g++ -o old_bin old_main.o old_side.o orig_hoermann.o Modbus.o
+g++ -o old_bin old_main.o old_side.o orig_hoermann.o Modbus.o ModbusRTU.o
 
 N="-std=gnu++17 -I nstub -I new -I ."
 g++ $N -c new/hoermann.cpp   -o new_hoermann.o
@@ -45,3 +46,14 @@ vergleiche() {
 vergleiche gen2.py frames2.txt "Funktionscodes"
 # 3) Befehlsstrecke: nextCommand plus Zeitspruenge um die 100-ms-Schwelle
 vergleiche gen4.py frames4.txt "Befehle"
+
+# 4) Bekannte, bewusste Abweichungen. Diese Telegramme sind kuerzer als das,
+#    was sie ankuendigen; die alte Fassung las dort ueber den Puffer hinaus,
+#    teils die eigenen CRC-Bytes als Nutzdaten. Nur Bericht, kein Fehler.
+echo "--- bewusste Abweichungen (abgeschnittene Telegramme) ---"
+python3 gen3.py >/dev/null
+for k in kurz17 kurz10 kurz16 kurz_kopf datei sonst; do
+  ./old_bin < "f_$k.txt" > a.txt; ./new_bin < "f_$k.txt" > b.txt
+  n=$(paste -d'|' a.txt b.txt | awk -F'|' '$1!=$2' | wc -l | tr -d ' ')
+  echo "  $k: $n von $(wc -l < "f_$k.txt" | tr -d ' ')"
+done
