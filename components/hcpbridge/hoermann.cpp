@@ -50,7 +50,7 @@ void HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
   xTaskCreatePinnedToCore(
       modbusServeTask,          /* Function to implement the task */
       "ModBusTask",             /* Name of the task */
-      4096,                     /* Stack size in words */
+      8192,                     /* Stapel in Byte (ESP-IDF), Protokollaufrufe brauchen Platz */
       NULL,                     /* Task input parameter */
       configMAX_PRIORITIES - 1, /* Priority */
       &modBusTask,              /* Task handle */
