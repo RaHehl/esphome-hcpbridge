@@ -7,7 +7,7 @@ static const char *const TAG = "hcpbridge.binary_sensor";
 static const char *const TAG2 = "hcpbridge.binary_sensor2";
 
 void HCPBridgeRelaySensor::setup() {
-    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); }, TAG);
+    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); });
     this->publish_state(false);
 }
 
@@ -21,7 +21,7 @@ void HCPBridgeRelaySensor::dump_config(){
 }
 
 void HCPBridgeIsConnected::setup() {
-    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); }, TAG2);
+    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); });
     this->publish_state(false);
 }
 

@@ -1,7 +1,5 @@
 #include "hcpbridge.h"
 
-#include <cinttypes>
-
 namespace esphome {
 namespace hcpbridge {
 
@@ -14,14 +12,8 @@ void HCPBridge::setup() {
   this->engine = &HoermannGarageEngine::getInstance();
   this->engine->setup(rx, tx, rts);
 }
-void HCPBridge::add_on_state_callback(std::function<void()> &&callback, const char *tag) {
-  auto wrapped_callback = [callback, tag]() {
-    auto start = millis();
-    callback();
-    auto end = millis();
-    ESP_LOGD(TAG, "Callback executed in %" PRIu32 " ms [Tag: %s]", (uint32_t)(end - start), tag);
-  };
-  this->state_callback_.add(std::move(wrapped_callback));
+void HCPBridge::add_on_state_callback(std::function<void()> &&callback) {
+  this->state_callback_.add(std::move(callback));
 }
 
 void HCPBridge::update() {
