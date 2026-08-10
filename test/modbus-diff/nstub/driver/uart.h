@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstddef>
 #include "freertos/FreeRTOS.h"
+#include "uartsim.h"
 typedef int uart_port_t;
 #define UART_NUM_2 2
 #define UART_PIN_NO_CHANGE (-1)
@@ -20,11 +21,23 @@ typedef int esp_err_t;
 #define ESP_OK 0
 inline esp_err_t uart_param_config(uart_port_t,const uart_config_t*){return 0;}
 inline esp_err_t uart_set_pin(uart_port_t,int,int,int,int){return 0;}
-inline esp_err_t uart_driver_install(uart_port_t,int,int,int,QueueHandle_t*,int){return 0;}
+inline esp_err_t uart_driver_install(uart_port_t,int,int,int,QueueHandle_t*q,int){ if(q) *q=(QueueHandle_t)&g_uart; return 0;}
 inline esp_err_t uart_set_mode(uart_port_t,uart_mode_t){return 0;}
 inline esp_err_t uart_set_rx_timeout(uart_port_t,uint8_t){return 0;}
 inline esp_err_t uart_set_rx_full_threshold(uart_port_t,int){return 0;}
-inline esp_err_t uart_flush_input(uart_port_t){return 0;}
-inline int uart_read_bytes(uart_port_t,uint8_t*,size_t,TickType_t){return 0;}
-inline int uart_write_bytes(uart_port_t,const char*,size_t){return 0;}
+inline esp_err_t uart_flush_input(uart_port_t){ g_uart.rx_pos=g_uart.rx_len; return 0;}
+inline int uart_read_bytes(uart_port_t,uint8_t*b,size_t n,TickType_t){
+  size_t avail = g_uart.rx_len - g_uart.rx_pos;
+  size_t take = n < avail ? n : avail;
+  memcpy(b, g_uart.rx + g_uart.rx_pos, take); g_uart.rx_pos += take; return (int)take; }
+inline int uart_write_bytes(uart_port_t,const char*d,size_t n){
+  memcpy(g_uart.tx + g_uart.tx_len, d, n); g_uart.tx_len += n; return (int)n; }
 inline esp_err_t uart_wait_tx_done(uart_port_t,TickType_t){return 0;}
+// muss nach der Ereignisstruktur stehen
+inline int xQueueReceive(QueueHandle_t, void *out, TickType_t) {
+  if (!g_uart.pending) return 0;
+  g_uart.pending = 0;
+  uart_event_t *e = (uart_event_t *)out;
+  e->type = UART_DATA; e->size = g_uart.pending_size;
+  return 1;  // pdTRUE
+}

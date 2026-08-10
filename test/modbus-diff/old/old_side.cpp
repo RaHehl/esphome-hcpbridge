@@ -1,7 +1,7 @@
 #include "hoermann.h"   // Urfassung
 #include "common.h"
 FakeSerial Serial2;
-static unsigned long g_millis = 1000;
+extern unsigned long g_millis;
 unsigned long millis() { return g_millis; }
 
 int ModbusRTU::exchange(const uint8_t *adu, size_t n, uint8_t *out) {

@@ -27,9 +27,21 @@ g++ $N -c new/modbus_rtu.cpp -o new_modbus.o
 g++ $N -c new/new_main.cpp   -o new_main.o
 g++ -o new_bin new_main.o new_hoermann.o new_modbus.o
 
-python3 gen2.py
-./old_bin < frames2.txt > o_alt.txt
-./new_bin < frames2.txt > o_neu.txt
-n=$(paste -d'|' o_alt.txt o_neu.txt | awk -F'|' '$1!=$2' | wc -l | tr -d ' ')
-echo "vollstaendige Telegramme: $n Abweichung(en)"
-[ "$n" = "0" ] || { diff o_alt.txt o_neu.txt | head -20; exit 1; }
+# 1) Pruefsumme: die echten crc16() beider Seiten gegeneinander
+awk 'NR>=11' mbesp/src/ModbusRTU.cpp | sed -n '1,/};/p' | sed 's/ PROGMEM//' > auchcrc.inc
+g++ -std=gnu++17 -I ../../components/hcpbridge -I nstub -I . crc_test.cpp new/modbus_rtu.cpp -o crc_test
+./crc_test
+
+vergleiche() {
+  python3 "$1" >/dev/null
+  ./old_bin < "$2" > o_alt.txt
+  ./new_bin < "$2" > o_neu.txt
+  n=$(paste -d'|' o_alt.txt o_neu.txt | awk -F'|' '$1!=$2' | wc -l | tr -d ' ')
+  t=$(grep -cv '^[TC]' "$2")
+  echo "$3: $t Telegramme, $n Abweichung(en)"
+  [ "$n" = "0" ] || { diff o_alt.txt o_neu.txt | head -20; exit 1; }
+}
+# 2) vollstaendige Telegramme aller Funktionscodes, eigene und fremde Adresse
+vergleiche gen2.py frames2.txt "Funktionscodes"
+# 3) Befehlsstrecke: nextCommand plus Zeitspruenge um die 100-ms-Schwelle
+vergleiche gen4.py frames4.txt "Befehle"

@@ -2,39 +2,46 @@
 #include "hoermann.h"      // neue Fassung
 #undef private
 #include "common.h"
+#include "uartsim.h"
+UartSim g_uart;
 #include <string>
 #include <iostream>
-static unsigned long g_millis = 1000;
+unsigned long g_millis = 1000;
 namespace esphome { unsigned long millis() { return g_millis; } }
 
-// Bildet die Annahmeentscheidungen aus ModbusRtuServer::poll() nach.
+// Faehrt den ECHTEN Produktivpfad: Bytes in die Schnittstelle, poll() laufen
+// lassen, gesendete Bytes einsammeln.
 int exchange_new(HoermannGarageEngine &e, const uint8_t *adu, size_t n, uint8_t *out) {
-  if (n < 4) return -1;
-  uint16_t got = (uint16_t)adu[n - 2] | ((uint16_t)adu[n - 1] << 8);
-  if (got != mbcrc(adu, n - 2)) return -1;
-  const uint8_t addr = adu[0];
-  const bool broadcast = (addr == 0);
-  if (!broadcast && addr != SLAVE_ID) return -1;
-  uint8_t tx[300];
-  size_t rlen = e.onFrame(adu, n - 2, tx);
-  if (rlen == 0 || broadcast) return -1;
-  memcpy(out, tx, rlen);
-  return (int)rlen;
+  g_uart.feed(adu, n);
+  e.mb.poll(0);
+  if (g_uart.tx_len == 0) return -1;
+  memcpy(out, g_uart.tx, g_uart.tx_len);
+  return (int)g_uart.tx_len;
 }
 int main() {
   auto &e = HoermannGarageEngine::getInstance();
+  e.setup(18, 17, -1);
   std::string line;
   uint8_t req[300], resp[300];
   while (std::getline(std::cin, line)) {
     if (line.empty()) continue;
+    if (line[0] == 'T') { g_millis = strtoul(line.c_str() + 1, nullptr, 10); continue; }
+    if (line[0] == 'C') {
+      static const HoermannCommand *cmds[7] = {
+          &HoermannCommand::STARTOPENDOOR, &HoermannCommand::STARTCLOSEDOOR,
+          &HoermannCommand::STARTIMPULSE,  &HoermannCommand::STARTOPENDOORHALF,
+          &HoermannCommand::STARTVENTPOSITION, &HoermannCommand::STARTTOGGLELAMP,
+          &HoermannCommand::WAITING};
+      e.setCommand(true, cmds[strtol(line.c_str() + 1, nullptr, 10) % 7]);
+      continue;
+    }
     size_t n = 0;
     for (size_t i = 0; i + 1 < line.size(); i += 2)
       req[n++] = (uint8_t)strtol(line.substr(i, 2).c_str(), nullptr, 16);
     int r = exchange_new(e, req, n, resp);
     printf("R:");
     if (r < 0) printf("-");
-    else { for (int i = 0; i < r; i++) printf("%02x", resp[i]);
-           uint16_t c = mbcrc(resp, r); printf("%02x%02x", c & 0xFF, c >> 8); }
+    else { for (int i = 0; i < r; i++) printf("%02x", resp[i]); }
     printf(" G:");
     for (int i=0;i<3;i++) printf("%04x", e.regGet(0x9C41+i));
     for (int i=0;i<9;i++) printf("%04x", e.regGet(0x9D31+i));

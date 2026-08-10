@@ -10,3 +10,9 @@ old/hoermann.h
 old/orig_hoermann.cpp
 new/hoermann.*
 new/modbus_rtu.*
+auchcrc.inc
+crc_test
+c_alt.txt
+c_neu.txt
+a.txt
+b.txt

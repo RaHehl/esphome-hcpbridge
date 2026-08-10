@@ -4,6 +4,7 @@
 #include "common.h"
 #include <string>
 #include <iostream>
+unsigned long g_millis = 1000;
 int main() {
   auto &e = HoermannGarageEngine::getInstance();
   e.setup(18, 17, -1);
@@ -11,6 +12,16 @@ int main() {
   uint8_t req[300], resp[300];
   while (std::getline(std::cin, line)) {
     if (line.empty()) continue;
+    if (line[0] == 'T') { g_millis = strtoul(line.c_str() + 1, nullptr, 10); continue; }
+    if (line[0] == 'C') {
+      static const HoermannCommand *cmds[7] = {
+          &HoermannCommand::STARTOPENDOOR, &HoermannCommand::STARTCLOSEDOOR,
+          &HoermannCommand::STARTIMPULSE,  &HoermannCommand::STARTOPENDOORHALF,
+          &HoermannCommand::STARTVENTPOSITION, &HoermannCommand::STARTTOGGLELAMP,
+          &HoermannCommand::WAITING};
+      e.setCommand(true, cmds[strtol(line.c_str() + 1, nullptr, 10) % 7]);
+      continue;
+    }
     size_t n = 0;
     for (size_t i = 0; i + 1 < line.size(); i += 2)
       req[n++] = (uint8_t)strtol(line.substr(i, 2).c_str(), nullptr, 16);

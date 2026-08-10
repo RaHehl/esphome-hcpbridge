@@ -9,5 +9,6 @@ typedef uint32_t TickType_t;
 #define pdTRUE 1
 #define portMAX_DELAY 0xFFFFFFFF
 #define configMAX_PRIORITIES 25
-inline int xQueueReceive(QueueHandle_t,void*,TickType_t){return 0;}
+struct uart_ev_sim { int type; size_t size; };
+inline int xQueueReceive(QueueHandle_t q,void*out,TickType_t);
 inline void xQueueReset(QueueHandle_t){}

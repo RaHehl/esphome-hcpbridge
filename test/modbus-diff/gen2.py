@@ -7,10 +7,12 @@ def crc(d):
         for _ in range(8): c=(c>>1)^0xA001 if c&1 else c>>1
     return c
 F=[]
-def add(p): F.append((p+bytes([crc(p)&0xFF,crc(p)>>8])).hex())
+def add(p):
+    if len(p)+2 > 256: return   # laengere Telegramme gibt es auf Modbus RTU nicht
+    F.append((p+bytes([crc(p)&0xFF,crc(p)>>8])).hex())
 A=[0x0000,0x9C40,0x9C41,0x9C42,0x9C43,0x9C44,0x9CB8,0x9CB9,0x9CBC,0x9CC0,0x9CC1,
    0x9D30,0x9D31,0x9D32,0x9D37,0x9D39,0x9D3A,0xFFF0,0xFFFF]
-SL=[2,0]
+SL=[2,2,2,0,1,3,247]
 # echte HCP-Muster
 for i in range(300):
     d=random.getrandbits(16); e=random.getrandbits(16)
