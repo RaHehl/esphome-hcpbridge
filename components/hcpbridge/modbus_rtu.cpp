@@ -61,8 +61,18 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
     // Half duplex transceiver: the driver toggles RTS around transmission.
     uart_set_mode(this->port_, UART_MODE_RS485_HALF_DUPLEX);
   }
-  // Rahmenende nach 3,5 Zeichenlaengen Stille, wie Modbus RTU es vorschreibt.
-  uart_set_rx_timeout(this->port_, 4);
+  // Rahmenende nach Stille auf der Leitung. Modbus RTU verlangt 3,5
+  // Zeichenlaengen; die abgeloeste Bibliothek wartete jedoch fest 1750 us,
+  // also deutlich grosszuegiger. Diese Grosszuegigkeit wird hier bewusst
+  // uebernommen: ein Antrieb, der mitten im Telegramm eine kurze Pause
+  // macht, wuerde sonst zwei unbrauchbare Bruchstuecke erzeugen.
+  const uint32_t symbol_us = 11UL * 1000000UL / baud;      // ~11 Bit je Zeichen
+  uint32_t symbols = (1750UL + symbol_us - 1) / symbol_us; // aufrunden
+  if (symbols < 4)
+    symbols = 4;
+  if (symbols > 100)
+    symbols = 100;
+  uart_set_rx_timeout(this->port_, static_cast<uint8_t>(symbols));
   // Schwelle hoch setzen, damit bei den kurzen HCP-Telegrammen immer die
   // Stille-Erkennung ausloest und nicht ein halbvoller Puffer.
   uart_set_rx_full_threshold(this->port_, 120);
