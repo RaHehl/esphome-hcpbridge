@@ -63,6 +63,46 @@ void HoermannGarageEngine::handleModbus()
   this->mb.poll();
 }
 
+uint16_t *HoermannGarageEngine::regPtr(uint16_t addr)
+{
+  if (addr >= REG_CMD_BASE && addr < REG_CMD_BASE + REG_CMD_COUNT)
+    return &this->regCmd[addr - REG_CMD_BASE];
+  if (addr >= REG_BCAST_BASE && addr < REG_BCAST_BASE + REG_BCAST_COUNT)
+    return &this->regBcast[addr - REG_BCAST_BASE];
+  if (addr >= REG_RESP_BASE && addr < REG_RESP_BASE + REG_RESP_COUNT)
+    return &this->regResp[addr - REG_RESP_BASE];
+  return nullptr;
+}
+
+uint16_t HoermannGarageEngine::regGet(uint16_t addr)
+{
+  const uint16_t *p = this->regPtr(addr);
+  return p != nullptr ? *p : 0x0000;  // nicht vorhandene Register lesen sich als 0
+}
+
+/**
+ * Wie setMultipleWords(): schreiben und zurueckpruefen. Ein nicht vorhandenes
+ * Register nimmt nichts an und liest sich als 0, der Schreibzugriff gilt daher
+ * nur dann als erfolgreich, wenn der Wert ohnehin 0 war.
+ */
+bool HoermannGarageEngine::regSet(uint16_t addr, uint16_t val)
+{
+  uint16_t *p = this->regPtr(addr);
+  if (p == nullptr)
+    return val == 0;
+  const uint16_t old = *p;
+  if (addr == REG_CMD_BASE + 0)
+    this->onCounterWrite(val);
+  else if (addr == REG_BCAST_BASE + 1)
+    this->onDoorPositonChanged(old, val);
+  else if (addr == REG_BCAST_BASE + 2)
+    this->onCurrentStateChanged(old, val);
+  else if (addr == REG_BCAST_BASE + 6)
+    this->onRegSevenChanged(old, val);
+  *p = val;
+  return true;
+}
+
 static inline uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] << 8) | p[1]; }
 static inline void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)(v & 0xFF); }
 
@@ -87,11 +127,16 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     return 3;
   };
 
-  if (fc == 0x17 && len >= 11)
+  if (fc == 0x17)
   {
     // Wie zuvor: die Bibliothek rief den Rueckruf nur fuer Telegramme auf,
     // die sie selbst behandelt, und dort vor jeder Pruefung.
     this->state->recordModbusResponse();
+    if (len < 11)
+    {
+      this->state->setValid(true);
+      return except(EX_ILLEGAL_VALUE);  // zu kurz zum Auswerten, aber ein bekannter Funktionscode
+    }
     const uint16_t readAddr = rd16(req + 2);
     const uint16_t readCnt = rd16(req + 4);
     const uint16_t writeAddr = rd16(req + 6);
@@ -138,33 +183,18 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
         len < (size_t)(11 + byteCnt))
       return except(EX_ILLEGAL_VALUE);
 
-    // --- Schritt 3: Schreibzugriffe uebernehmen ---
-    // Wie setMultipleWords(): ein Schreibzugriff ausserhalb des Blocks kann
-    // nicht zurueckgelesen werden und scheitert - ausser der Wert ist 0, denn
-    // ein nicht vorhandenes Register liest sich als 0.
+    // --- Schritt 3: Schreibzugriffe uebernehmen (setMultipleWords) ---
     bool write_ok = true;
     for (uint16_t i = 0; i < writeCnt; i++)
-    {
-      const uint16_t val = rd16(wdata + 2 * i);
-      const uint32_t idx = (uint32_t)writeAddr + i - REG_CMD_BASE;
-      if (writeAddr + i < REG_CMD_BASE || idx >= REG_CMD_COUNT)
-      {
-        if (val != 0)
-          write_ok = false;
-        continue;
-      }
-      // Nur Register 0 hat eine Wirkung; die uebrigen wurden frueher zwar
-      // abgelegt, aber nie wieder gelesen.
-      if (idx == 0)
-        this->onCounterWrite(val);
-    }
+      if (!this->regSet((uint16_t)(writeAddr + i), rd16(wdata + 2 * i)))
+        write_ok = false;
     if (!write_ok)
       return except(EX_SLAVE_FAILURE);
 
-    // --- Schritt 4: antworten ---
-    // Wie readWords() ohne MODBUS_STRICT_REG: nur das erste Register muss
-    // existieren, ausserhalb des Blocks werden Nullen geliefert.
-    if (readAddr < REG_RESP_BASE || readAddr >= REG_RESP_BASE + REG_RESP_COUNT)
+    // --- Schritt 4: antworten (readWords ohne MODBUS_STRICT_REG) ---
+    // Nur das erste Register muss existieren, darueber hinaus werden Nullen
+    // geliefert.
+    if (!this->regExists(readAddr))
       return except(EX_ILLEGAL_ADDRESS);
     size_t n = 0;
     resp[n++] = req[0];
@@ -172,41 +202,33 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     resp[n++] = (uint8_t)(readCnt * 2);
     for (uint16_t i = 0; i < readCnt; i++)
     {
-      const uint32_t idx = (uint32_t)readAddr + i - REG_RESP_BASE;
-      wr16(resp + n, idx < REG_RESP_COUNT ? this->regResp[idx] : 0x0000);
+      wr16(resp + n, this->regGet((uint16_t)(readAddr + i)));
       n += 2;
     }
     return n;
   }
 
-  if (fc == 0x10 && len >= 7)
+  if (fc == 0x10)
   {
     this->state->recordModbusResponse();
+    this->state->setValid(true);
+    if (len < 7)
+      return except(EX_ILLEGAL_VALUE);
     const uint16_t addr = rd16(req + 2);
     const uint16_t cnt = rd16(req + 4);
     const uint8_t byteCnt = req[6];
     const uint8_t *wdata = req + 7;
 
-    this->state->setValid(true);
     if (cnt < 1 || cnt > MODBUS_MAX_WORDS || (0xFFFF - addr) < cnt || byteCnt != 2 * cnt ||
         len < (size_t)(7 + byteCnt))
       return except(EX_ILLEGAL_VALUE);
-    if (addr < REG_BCAST_BASE || (uint32_t)addr + cnt > REG_BCAST_BASE + REG_BCAST_COUNT)
-      return except(EX_ILLEGAL_ADDRESS);
+    // Hier verlangte die Bibliothek jedes einzelne Register.
+    for (uint16_t i = 0; i < cnt; i++)
+      if (!this->regExists((uint16_t)(addr + i)))
+        return except(EX_ILLEGAL_ADDRESS);
 
     for (uint16_t i = 0; i < cnt; i++)
-    {
-      const uint16_t val = rd16(wdata + 2 * i);
-      const uint16_t idx = (uint16_t)(addr + i - REG_BCAST_BASE);
-      const uint16_t old = this->regBcast[idx];
-      if (idx == 1)
-        this->onDoorPositonChanged(old, val);
-      else if (idx == 2)
-        this->onCurrentStateChanged(old, val);
-      else if (idx == 6)
-        this->onRegSevenChanged(old, val);
-      this->regBcast[idx] = val;
-    }
+      this->regSet((uint16_t)(addr + i), rd16(wdata + 2 * i));
 
     size_t n = 0;
     resp[n++] = req[0];

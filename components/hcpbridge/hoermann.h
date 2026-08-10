@@ -136,6 +136,14 @@ public:
      */
     void onCounterWrite(uint16_t val);
 
+    // Gemeinsame Registerkarte ueber alle drei Bloecke, wie sie die
+    // abgeloeste Bibliothek fuehrte. Beide Funktionscodes greifen darauf zu,
+    // deshalb wirken Rueckrufe unabhaengig davon, wer schreibt.
+    uint16_t *regPtr(uint16_t addr);
+    bool regExists(uint16_t addr) { return this->regPtr(addr) != nullptr; }
+    uint16_t regGet(uint16_t addr);
+    bool regSet(uint16_t addr, uint16_t val);
+
     /**
      * Helper to set next Command and *not* skip Current Command before end was sent
      */
@@ -157,6 +165,7 @@ public:
 private:
     HoermannGarageEngine(){};
     esphome::hcpbridge::ModbusRtuServer mb;       // eigener RTU-Server, keine Fremdbibliothek
+    uint16_t regCmd[REG_CMD_COUNT] = {0};         // 0x9C41, vom Antrieb geschrieben
     uint16_t regBcast[REG_BCAST_COUNT] = {0};     // 0x9D31, Zustand des Antriebs
     uint16_t regResp[REG_RESP_COUNT] = {0};       // 0x9CB9, unsere Antwort
     std::atomic<const HoermannCommand *> nextCommand{nullptr}; // wird zwischen Hauptschleife und Bus-Task geteilt
