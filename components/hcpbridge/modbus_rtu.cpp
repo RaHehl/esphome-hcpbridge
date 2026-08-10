@@ -46,8 +46,12 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
     ESP_LOGE(TAG, "uart_set_pin failed");
     return false;
   }
-  if (uart_driver_install(this->port_, MODBUS_MAX_FRAME * 4, MODBUS_MAX_FRAME * 4, 0, nullptr, 0) !=
-      ESP_OK) {
+  // Ereigniswarteschlange ist zwingend: nur ueber sie meldet der Treiber das
+  // Ende eines Telegramms. Ohne sie wuerde uart_read_bytes einfach bis zum
+  // Ablauf seiner eigenen Frist warten und dabei zwei Telegramme zu einem
+  // verschmelzen.
+  if (uart_driver_install(this->port_, MODBUS_MAX_FRAME * 4, MODBUS_MAX_FRAME * 4, 20, &this->queue_,
+                          0) != ESP_OK) {
     ESP_LOGE(TAG, "uart_driver_install failed");
     return false;
   }
@@ -55,8 +59,11 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
     // Half duplex transceiver: the driver toggles RTS around transmission.
     uart_set_mode(this->port_, UART_MODE_RS485_HALF_DUPLEX);
   }
-  // End of frame after 3.5 idle character times, as Modbus RTU requires.
+  // Rahmenende nach 3,5 Zeichenlaengen Stille, wie Modbus RTU es vorschreibt.
   uart_set_rx_timeout(this->port_, 4);
+  // Schwelle hoch setzen, damit bei den kurzen HCP-Telegrammen immer die
+  // Stille-Erkennung ausloest und nicht ein halbvoller Puffer.
+  uart_set_rx_full_threshold(this->port_, 120);
 
   ESP_LOGI(TAG, "RTU server on UART%d rx=%d tx=%d rts=%d %" PRIu32 " baud 8E1, slave id %u",
            static_cast<int>(this->port_), rx_pin, tx_pin, rts_pin, baud, this->slave_id_);
@@ -64,8 +71,21 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
 }
 
 void ModbusRtuServer::poll(uint32_t timeout_ms) {
-  int len = uart_read_bytes(this->port_, this->rx_buf_, sizeof(this->rx_buf_),
-                            pdMS_TO_TICKS(timeout_ms));
+  uart_event_t ev;
+  if (this->queue_ == nullptr)
+    return;
+  if (xQueueReceive(this->queue_, &ev, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    return;
+  if (ev.type == UART_FIFO_OVF || ev.type == UART_BUFFER_FULL) {
+    ESP_LOGW(TAG, "RX overflow, flushing");
+    uart_flush_input(this->port_);
+    xQueueReset(this->queue_);
+    return;
+  }
+  if (ev.type != UART_DATA)
+    return;
+  size_t to_read = ev.size > sizeof(this->rx_buf_) ? sizeof(this->rx_buf_) : ev.size;
+  int len = uart_read_bytes(this->port_, this->rx_buf_, to_read, 0);
   if (len < 4)  // address + function + CRC is the shortest possible frame
     return;
 

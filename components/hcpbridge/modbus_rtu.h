@@ -15,6 +15,8 @@
 #include <functional>
 
 #include "driver/uart.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 
 namespace esphome {
 namespace hcpbridge {
@@ -37,6 +39,7 @@ class ModbusRtuServer {
 
  private:
   uart_port_t port_{UART_NUM_2};
+  QueueHandle_t queue_{nullptr};
   uint8_t slave_id_{2};
   Handler handler_;
   uint8_t rx_buf_[MODBUS_MAX_FRAME];

@@ -81,6 +81,17 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
   {
     const uint16_t readAddr = rd16(req + 2);
     const uint16_t readCnt = rd16(req + 4);
+    // Ohne diese Pruefung wuerde ein verstuemmeltes Telegramm mit grosser
+    // Leseanzahl den Sendepuffer ueberschreiben. 0x7D ist das Maximum,
+    // das Modbus fuer Funktionscode 0x17 zulaesst.
+    if (readCnt == 0 || readCnt > 0x7D)
+    {
+      ESP_LOGW(TAG_HCI, "invalid read count %u", readCnt);
+      resp[0] = req[0];
+      resp[1] = (uint8_t)(fc | 0x80);
+      resp[2] = 0x03;  // ILLEGAL DATA VALUE
+      return 3;
+    }
     const uint16_t writeAddr = rd16(req + 6);
     const uint16_t writeCnt = rd16(req + 8);
     const uint8_t byteCnt = req[10];
@@ -176,10 +187,15 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     return n;
   }
 
+  // Ausnahmeantwort statt Schweigen: ein Master, der auf Antwort wartet,
+  // wertet Stille sonst als Ausfall der Station.
   this->state->debugMessage = "unknown function code";
   this->state->debMessage = true;
   ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
-  return 0;
+  resp[0] = req[0];
+  resp[1] = (uint8_t)(fc | 0x80);
+  resp[2] = 0x01;  // ILLEGAL FUNCTION
+  return 3;
 }
 
 void HoermannGarageEngine::setCommandValuesToRead()
