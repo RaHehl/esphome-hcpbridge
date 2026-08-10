@@ -40,5 +40,22 @@ for it in range(30000):
     else:
         v=random.choice([c1,0xFF00,0x0000,random.getrandbits(16)])
         add(bytes([sl,fc])+struct.pack('>HH',a,v))
+# Telegramme mit Anhaengsel hinter den angekuendigten Daten. Die alte Fassung
+# echot bei 0x06/0x16 die GANZE empfangene PDU zurueck, Anhaengsel inklusive.
+for it in range(4000):
+    sl=random.choice(SL); extra=bytes(random.getrandbits(8) for _ in range(random.randint(1,8)))
+    fc=random.choice([0x06,0x16,0x03,0x10,0x17,0x01,0x05])
+    a=random.choice(A); c1=random.choice([1,2,3,8])
+    if fc==0x17:
+        wc=random.choice([1,2,3]); bc=2*wc
+        add(bytes([sl,fc])+struct.pack('>HHHHB',a,c1,random.choice(A),wc,bc)+bytes(bc)+extra)
+    elif fc==0x10:
+        bc=2*c1
+        add(bytes([sl,fc])+struct.pack('>HHB',a,c1,bc)+bytes(bc)+extra)
+    elif fc==0x16:
+        add(bytes([sl,fc])+struct.pack('>HHH',a,random.getrandbits(16),random.getrandbits(16))+extra)
+    else:
+        add(bytes([sl,fc])+struct.pack('>HH',a,random.getrandbits(16))+extra)
+
 open('frames2.txt','w').write('\n'.join(F)+'\n')
 print(len(F),"vollstaendige Telegramme")

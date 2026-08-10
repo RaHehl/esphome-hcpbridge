@@ -1,13 +1,19 @@
-// Minimal Modbus RTU server for the Hoermann HCP bus.
+// Modbus RTU server for the Hoermann HCP bus.
 //
-// Replaces the Arduino library "emelianov/modbus-esp8266". Only what the
-// door drive actually asks for is implemented: function code 0x17
-// (read/write multiple registers) and 0x10 (write multiple registers).
+// Replaces the Arduino library "emelianov/modbus-esp8266". The transport
+// lives here; which function codes exist and how they answer is in
+// hoermann.cpp, deliberately matching what that library did (see
+// test/modbus-diff/run.sh, which compiles the old library and compares).
 //
 // Frame detection uses the ESP-IDF UART driver's RX timeout: Modbus RTU
 // separates frames by a gap of 3.5 character times, and the driver raises
 // an event once the line has been idle that long. Polling for that in
 // software - as the Arduino version had to - is far less reliable.
+//
+// One deliberate difference: with rts_pin configured this uses the driver's
+// RS485 half duplex mode, where the hardware drives the direction pin. The
+// Arduino version toggled that pin from software around each send. The
+// option is off by default and untested on hardware.
 #pragma once
 
 #include <cstdint>
@@ -25,7 +31,7 @@ static constexpr size_t MODBUS_MAX_FRAME = 256;
 
 // Puffermarke des Treibers. Ab hier kann ein Telegramm gestueckelt gemeldet
 // werden, siehe poll().
-static const int RX_FULL_THRESHOLD = 120;
+static constexpr int RX_FULL_THRESHOLD = 120;
 
 class ModbusRtuServer {
  public:
