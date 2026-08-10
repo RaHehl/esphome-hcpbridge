@@ -602,10 +602,23 @@ void HoermannState::clearChanged()
 {
   this->changed = false;
 }
+static bool isMoving(HoermannState::State s)
+{
+  return s == HoermannState::State::OPENING || s == HoermannState::State::CLOSING ||
+         s == HoermannState::State::MOVE_HALF || s == HoermannState::State::MOVE_VENTING;
+}
+
 void HoermannState::setState(State state)
 {
+  const bool was_moving = isMoving(this->state);
   this->state = state;
   this->changed = true;
+  // A go-to-position target must not survive a movement that ended for another
+  // reason - obstacle, hand transmitter, stop button. It was only cleared on
+  // reaching the target, so the next run in the same direction was stopped at
+  // a position nobody asked for.
+  if (was_moving && !isMoving(state))
+    this->gotoPosition = 0.0f;
 }
 void HoermannState::setValid(bool isValid)
 {
