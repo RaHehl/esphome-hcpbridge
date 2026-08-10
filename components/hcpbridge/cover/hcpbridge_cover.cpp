@@ -35,20 +35,25 @@ cover::CoverTraits HCPBridgeCover::get_traits() {
 }
 
 void HCPBridgeCover::control(const cover::CoverCall &call) {
+  bool ok = true;
   if (call.get_stop()) {
-    this->parent_->engine->stopDoor();
+    ok = this->parent_->engine->stopDoor() && ok;
   }
   if (call.get_position().has_value()) {
     if (call.get_position().value() == 1.0f) {
-      this->parent_->engine->openDoor();
+      ok = this->parent_->engine->openDoor() && ok;
     } else if (call.get_position().value() == 0.0f) {
-      this->parent_->engine->closeDoor();
+      ok = this->parent_->engine->closeDoor() && ok;
     } else {
-      this->parent_->engine->setPosition(call.get_position().value() * 100.0f);
+      ok = this->parent_->engine->setPosition(call.get_position().value() * 100.0f) && ok;
     }
   }
   if (call.get_toggle()) {
-    this->parent_->engine->impulseDoor();
+    ok = this->parent_->engine->impulseDoor() && ok;
+  }
+  if (!ok) {
+    ESP_LOGW(TAG, "command dropped, the drive has not fetched the previous one yet");
+    this->publish_state();  // keep Home Assistant on the real position
   }
 }
 

@@ -143,22 +143,24 @@ public:
     void onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
 
     /**
-     * Helper to set next Command and *not* skip Current Command before end was sent
+     * Helper to set next Command and *not* skip Current Command before end was
+     * sent. Returns false when the slot was still occupied, i.e. the command
+     * was dropped.
      */
-    void setCommand(bool cond, const HoermannCommand *command);
+    bool setCommand(bool cond, const HoermannCommand *command);
 
     /**
      * Control Functions
      */
-    void stopDoor();
-    void closeDoor();
-    void openDoor();
-    void impulseDoor();
-    void halfPositionDoor();
-    void ventilationPositionDoor();
-    void turnLight(bool on);
-    void toggleLight();
-    void setPosition(int setPosition);
+    bool stopDoor();
+    bool closeDoor();
+    bool openDoor();
+    bool impulseDoor();
+    bool halfPositionDoor();
+    bool ventilationPositionDoor();
+    bool turnLight(bool on);
+    bool toggleLight();
+    bool setPosition(int setPosition);
 
 private:
     HoermannGarageEngine(){};

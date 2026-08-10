@@ -41,14 +41,16 @@ void HCPBridgeSwitchVent::write_state(bool state) {
   if (state) {
     if (this->parent_->engine->state->state != HoermannState::State::VENT) {
       ESP_LOGD(TAG, "HCPBridgeSwitchVent::write_state() - Setting door to vent");
-      this->parent_->engine->ventilationPositionDoor();
+      if (!this->parent_->engine->ventilationPositionDoor())
+        return this->command_dropped(TAG);
     } else {
       ESP_LOGD(TAG, "HCPBridgeSwitchVent::write_state() - Door already in vent state");
     }
   } else {
     if (this->parent_->engine->state->state != HoermannState::State::CLOSED) {
       ESP_LOGD(TAG, "HCPBridgeSwitchVent::write_state() - Closing door");
-      this->parent_->engine->closeDoor();
+      if (!this->parent_->engine->closeDoor())
+        return this->command_dropped(TAG);
     } else {
       ESP_LOGD(TAG, "HCPBridgeSwitchVent::write_state() - Door already closed");
     }
@@ -90,14 +92,16 @@ void HCPBridgeSwitchHalf::write_state(bool state) {
   if (state) {
     if (this->parent_->engine->state->state != HoermannState::State::HALFOPEN) {
       ESP_LOGD(TAG, "HCPBridgeSwitchHalf::write_state() - Setting door to half open");
-      this->parent_->engine->halfPositionDoor();
+      if (!this->parent_->engine->halfPositionDoor())
+        return this->command_dropped(TAG2);
     } else {
       ESP_LOGD(TAG, "HCPBridgeSwitchHalf::write_state() - Door already in half open state");
     }
   } else {
     if (this->parent_->engine->state->state != HoermannState::State::CLOSED) {
       ESP_LOGD(TAG, "HCPBridgeSwitchHalf::write_state() - Closing door");
-      this->parent_->engine->closeDoor();
+      if (!this->parent_->engine->closeDoor())
+        return this->command_dropped(TAG2);
     } else {
       ESP_LOGD(TAG, "HCPBridgeSwitchHalf::write_state() - Door already closed");
     }
