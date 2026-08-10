@@ -2,6 +2,7 @@
 
 #ifndef HOERMANN_H_
 #define HOERMANN_H_
+#include <atomic>
 #include <cstdint>
 
 #include "modbus_rtu.h"
@@ -160,7 +161,7 @@ private:
     esphome::hcpbridge::ModbusRtuServer mb;       // eigener RTU-Server, keine Fremdbibliothek
     uint16_t regBcast[REG_BCAST_COUNT] = {0};     // 0x9D31, Zustand des Antriebs
     uint16_t regResp[REG_RESP_COUNT] = {0};       // 0x9CB9, unsere Antwort
-    const HoermannCommand *nextCommand = nullptr; // Next Command to transmit
+    std::atomic<const HoermannCommand *> nextCommand{nullptr}; // wird zwischen Hauptschleife und Bus-Task geteilt
     unsigned long commandWrittenOn = 0;           // When was last command written (wait 100ms before end of command is transmitted)
 };
 #endif

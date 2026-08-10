@@ -21,11 +21,6 @@ const HoermannCommand HoermannCommand::WAITING = HoermannCommand(0x0000, 0x0000,
 TaskHandle_t modBusTask;
 void modbusServeTask(void *parameter);
 
-void DelayHandler(void)
-{
-  HoermannGarageEngine::getInstance().handleModbus();
-}
-
 void modbusServeTask(void *parameter)
 {
   while (true)
@@ -219,26 +214,29 @@ void HoermannGarageEngine::setCommandValuesToRead()
   uint16_t regPlug3Value = 0x0000;
 
   // Command was set
-  if (nextCommand != nullptr)
+  const HoermannCommand *cmd = this->nextCommand.load();
+  if (cmd != nullptr)
   {
     // But not yet sent
     if (commandWrittenOn == 0)
     {
       // Send it
-      regPlug2Value = nextCommand->commandRegPlus2Value;
-      regPlug3Value = nextCommand->commandRegPlus3Value;
+      regPlug2Value = cmd->commandRegPlus2Value;
+      regPlug3Value = cmd->commandRegPlus3Value;
       ESP_LOGI(TAG_HCI, "command start %x %x", regPlug2Value, regPlug3Value);
       commandWrittenOn = esphome::millis();
       // It was written and it can be cleared
     }
-    else if (commandWrittenOn != 0 && (commandWrittenOn + SIMULATEKEYPRESSDELAYMS) < esphome::millis())
+    // Differenz bilden statt zu addieren: die Addition laeuft beim Ueberlauf
+    // von millis() ueber und der Befehl haengt dann fest.
+    else if (commandWrittenOn != 0 && (esphome::millis() - commandWrittenOn) > SIMULATEKEYPRESSDELAYMS)
     {
-      regPlug2Value = nextCommand->commandEndPlus2Value;
-      regPlug3Value = nextCommand->commandEndPlus3Value;
+      regPlug2Value = cmd->commandEndPlus2Value;
+      regPlug3Value = cmd->commandEndPlus3Value;
       ESP_LOGI(TAG_HCI, "command dispose %x %x", regPlug2Value, regPlug3Value);
       // Reset Variables
       commandWrittenOn = 0;
-      nextCommand = nullptr;
+      this->nextCommand.store(nullptr);
     }
   }
   this->regResp[2] = regPlug2Value;
@@ -353,13 +351,13 @@ void HoermannGarageEngine::setCommand(bool cond, const HoermannCommand *command)
 {
   if (cond)
   {
-    if (nextCommand != nullptr)
+    // Wird aus der Hauptschleife gesetzt und im Bus-Task auf Kern 1 gelesen.
+    // Ein Zeigerwechsel ist auf dem ESP32 atomar; der Test-und-Setz-Ablauf
+    // darunter ist es nicht, deshalb kurz sperren.
+    const HoermannCommand *expected = nullptr;
+    if (!this->nextCommand.compare_exchange_strong(expected, command))
     {
       ESP_LOGW(TAG_HCI, "Last Command was not yet fetched by modbus!");
-    }
-    else
-    {
-      nextCommand = command;
     }
   }
 }
@@ -462,7 +460,8 @@ long HoermannState::responseAge()
   {
     return -1;
   }
-  long diff = esphome::millis() - lastModbusRespone;
+  // Vorzeichenlos rechnen, sonst kippt der Vergleich beim Ueberlauf.
+  uint32_t diff = esphome::millis() - lastModbusRespone;
   if (diff < 0)
   {
     return -2;
