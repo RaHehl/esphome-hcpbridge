@@ -106,6 +106,14 @@ public:
 #define REG_RESP_BASE 0x9CB9
 #define REG_RESP_COUNT 8
 
+// Werte wie in der frueheren Bibliothek, damit sich die Station bei
+// fehlerhaften Telegrammen genauso verhaelt wie bisher.
+#define MODBUS_MAX_WORDS 0x007D
+#define EX_ILLEGAL_FUNCTION 0x01
+#define EX_ILLEGAL_ADDRESS 0x02
+#define EX_ILLEGAL_VALUE 0x03
+#define EX_SLAVE_FAILURE 0x04
+
 class HoermannGarageEngine
 {
 public:

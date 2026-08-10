@@ -77,26 +77,26 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
   const uint8_t fc = req[1];
   this->state->recordModbusResponse();
 
+  // Ausnahmeantwort im Modbus-Format: Adresse, Funktionscode mit gesetztem
+  // hoechsten Bit, Fehlercode.
+  auto except = [&](uint8_t code) -> size_t
+  {
+    resp[0] = req[0];
+    resp[1] = (uint8_t)(fc | 0x80);
+    resp[2] = code;
+    return 3;
+  };
+
   if (fc == 0x17 && len >= 11)
   {
     const uint16_t readAddr = rd16(req + 2);
     const uint16_t readCnt = rd16(req + 4);
-    // Ohne diese Pruefung wuerde ein verstuemmeltes Telegramm mit grosser
-    // Leseanzahl den Sendepuffer ueberschreiben. 0x7D ist das Maximum,
-    // das Modbus fuer Funktionscode 0x17 zulaesst.
-    if (readCnt == 0 || readCnt > 0x7D)
-    {
-      ESP_LOGW(TAG_HCI, "invalid read count %u", readCnt);
-      resp[0] = req[0];
-      resp[1] = (uint8_t)(fc | 0x80);
-      resp[2] = 0x03;  // ILLEGAL DATA VALUE
-      return 3;
-    }
     const uint16_t writeAddr = rd16(req + 6);
     const uint16_t writeCnt = rd16(req + 8);
     const uint8_t byteCnt = req[10];
     const uint8_t *wdata = req + 11;
 
+    // --- Schritt 1: Antwortregister vorbelegen (entspricht onRequest) ---
     if (writeAddr == REG_CMD_BASE && writeCnt == 0x02 && readAddr == REG_RESP_BASE && readCnt == 0x08)
     {
       this->regResp[0] = 0x0000;
@@ -127,28 +127,34 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
       ESP_LOGW(TAG_HCI, "unexpected 0x17 read=%04x/%u write=%04x/%u", readAddr, readCnt, writeAddr, writeCnt);
     }
 
-    // Schreibzugriffe uebernehmen
-    for (uint16_t i = 0; i < writeCnt && (11 + 2 * i + 1) < len && 2 * i + 1 < byteCnt; i++)
+    // --- Schritt 2: dieselben Pruefungen wie die fruehere Bibliothek ---
+    if (readCnt < 1 || readCnt > MODBUS_MAX_WORDS || writeCnt < 1 || writeCnt > MODBUS_MAX_WORDS ||
+        (0xFFFF - readAddr) < readCnt || (0xFFFF - writeAddr) < writeCnt || byteCnt != 2 * writeCnt ||
+        len < (size_t)(11 + byteCnt))
+      return except(EX_ILLEGAL_VALUE);
+
+    // --- Schritt 3: Schreibzugriffe uebernehmen ---
+    if (writeAddr < REG_CMD_BASE || (uint32_t)writeAddr + writeCnt > REG_CMD_BASE + REG_CMD_COUNT)
+      return except(EX_SLAVE_FAILURE);
+    for (uint16_t i = 0; i < writeCnt; i++)
     {
       const uint16_t val = rd16(wdata + 2 * i);
       const uint16_t idx = (uint16_t)(writeAddr + i - REG_CMD_BASE);
-      if (idx < REG_CMD_COUNT)
-      {
-        if (idx == 0)
-          this->onCounterWrite(val);
-        this->regCmd[idx] = val;
-      }
+      if (idx == 0)
+        this->onCounterWrite(val);
+      this->regCmd[idx] = val;
     }
 
-    // Antwort zusammensetzen
+    // --- Schritt 4: antworten ---
+    if (readAddr < REG_RESP_BASE || (uint32_t)readAddr + readCnt > REG_RESP_BASE + REG_RESP_COUNT)
+      return except(EX_ILLEGAL_ADDRESS);
     size_t n = 0;
     resp[n++] = req[0];
     resp[n++] = fc;
     resp[n++] = (uint8_t)(readCnt * 2);
     for (uint16_t i = 0; i < readCnt; i++)
     {
-      const uint16_t idx = (uint16_t)(readAddr + i - REG_RESP_BASE);
-      wr16(resp + n, idx < REG_RESP_COUNT ? this->regResp[idx] : 0x0000);
+      wr16(resp + n, this->regResp[readAddr + i - REG_RESP_BASE]);
       n += 2;
     }
     this->state->setValid(true);
@@ -162,12 +168,16 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     const uint8_t byteCnt = req[6];
     const uint8_t *wdata = req + 7;
 
-    for (uint16_t i = 0; i < cnt && (7 + 2 * i + 1) < len && 2 * i + 1 < byteCnt; i++)
+    if (cnt < 1 || cnt > MODBUS_MAX_WORDS || (0xFFFF - addr) < cnt || byteCnt != 2 * cnt ||
+        len < (size_t)(7 + byteCnt))
+      return except(EX_ILLEGAL_VALUE);
+    if (addr < REG_BCAST_BASE || (uint32_t)addr + cnt > REG_BCAST_BASE + REG_BCAST_COUNT)
+      return except(EX_ILLEGAL_ADDRESS);
+
+    for (uint16_t i = 0; i < cnt; i++)
     {
       const uint16_t val = rd16(wdata + 2 * i);
       const uint16_t idx = (uint16_t)(addr + i - REG_BCAST_BASE);
-      if (idx >= REG_BCAST_COUNT)
-        continue;
       const uint16_t old = this->regBcast[idx];
       if (idx == 1)
         this->onDoorPositonChanged(old, val);
@@ -187,15 +197,10 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     return n;
   }
 
-  // Ausnahmeantwort statt Schweigen: ein Master, der auf Antwort wartet,
-  // wertet Stille sonst als Ausfall der Station.
   this->state->debugMessage = "unknown function code";
   this->state->debMessage = true;
   ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
-  resp[0] = req[0];
-  resp[1] = (uint8_t)(fc | 0x80);
-  resp[2] = 0x01;  // ILLEGAL FUNCTION
-  return 3;
+  return except(EX_ILLEGAL_FUNCTION);
 }
 
 void HoermannGarageEngine::setCommandValuesToRead()
