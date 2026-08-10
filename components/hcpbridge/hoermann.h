@@ -10,7 +10,6 @@
 #define SLAVE_ID 2
 #define HCP_BAUD 57600
 #define SIMULATEKEYPRESSDELAYMS 100
-#define DEADREPORTTIMEOUT 60000
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3
 #define PIN_TXD 17
@@ -91,7 +90,6 @@ public:
     void recordModbusResponse();
     void clearChanged();
     void clearDebug();
-    long responseAge();
     void setState(State state);
     void setValid(bool isValid);
 

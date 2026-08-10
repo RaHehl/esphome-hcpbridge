@@ -454,20 +454,6 @@ void HoermannState::clearDebug()
   this->debMessage = false;
   this->debugMessage = "Initial";
 }
-long HoermannState::responseAge()
-{
-  if (this->lastModbusRespone == 0)
-  {
-    return -1;
-  }
-  // Vorzeichenlos rechnen, sonst kippt der Vergleich beim Ueberlauf.
-  uint32_t diff = esphome::millis() - lastModbusRespone;
-  if (diff < 0)
-  {
-    return -2;
-  }
-  return diff / 1000;
-}
 void HoermannState::setState(State state)
 {
   this->state = state;
