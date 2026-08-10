@@ -136,6 +136,11 @@ void ModbusRtuServer::poll(uint32_t timeout_ms) {
   this->tx_buf_[rlen++] = static_cast<uint8_t>(crc & 0xFF);
   this->tx_buf_[rlen++] = static_cast<uint8_t>(crc >> 8);
   uart_write_bytes(this->port_, reinterpret_cast<const char *>(this->tx_buf_), rlen);
+  // Die abgeloeste Bibliothek beendete das Senden mit flush(), das auf dem
+  // ESP32 wartet, bis alle Bytes heraus sind. Erst danach horchte sie wieder.
+  // Ohne dieses Warten wuerden wir auf einem Halbduplexbus lauschen, waehrend
+  // wir selbst noch senden.
+  uart_wait_tx_done(this->port_, pdMS_TO_TICKS(50));
 }
 
 }  // namespace hcpbridge
