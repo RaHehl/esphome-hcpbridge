@@ -107,6 +107,7 @@ public:
 // Werte wie in der frueheren Bibliothek, damit sich die Station bei
 // fehlerhaften Telegrammen genauso verhaelt wie bisher.
 #define MODBUS_MAX_WORDS 0x007D
+#define MODBUS_MAX_BITS 0x07D0
 #define EX_ILLEGAL_FUNCTION 0x01
 #define EX_ILLEGAL_ADDRESS 0x02
 #define EX_ILLEGAL_VALUE 0x03
@@ -142,7 +143,9 @@ public:
     uint16_t *regPtr(uint16_t addr);
     bool regExists(uint16_t addr) { return this->regPtr(addr) != nullptr; }
     uint16_t regGet(uint16_t addr);
-    bool regSet(uint16_t addr, uint16_t val);
+    bool regWrite(uint16_t addr, uint16_t val);       // wie Reg(addr,val)
+    bool regSetChecked(uint16_t addr, uint16_t val);  // wie setMultipleWords je Register
+    void onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
 
     /**
      * Helper to set next Command and *not* skip Current Command before end was sent

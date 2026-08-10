@@ -1,0 +1,12 @@
+mbesp/
+*.o
+old_bin
+new_bin
+frames*.txt
+o_alt.txt
+o_neu.txt
+f_*.txt
+old/hoermann.h
+old/orig_hoermann.cpp
+new/hoermann.*
+new/modbus_rtu.*

@@ -1,5 +1,7 @@
 // Credits to https://github.com/Gifford47/HCPBridgeMqtt for the initial code base
 
+#include <cstring>
+
 #include "hoermann.h"
 
 #include "esphome/core/hal.h"
@@ -80,16 +82,12 @@ uint16_t HoermannGarageEngine::regGet(uint16_t addr)
   return p != nullptr ? *p : 0x0000;  // nicht vorhandene Register lesen sich als 0
 }
 
-/**
- * Wie setMultipleWords(): schreiben und zurueckpruefen. Ein nicht vorhandenes
- * Register nimmt nichts an und liest sich als 0, der Schreibzugriff gilt daher
- * nur dann als erfolgreich, wenn der Wert ohnehin 0 war.
- */
-bool HoermannGarageEngine::regSet(uint16_t addr, uint16_t val)
+/** Wie Reg(addr, val): false, wenn es das Register nicht gibt. */
+bool HoermannGarageEngine::regWrite(uint16_t addr, uint16_t val)
 {
   uint16_t *p = this->regPtr(addr);
   if (p == nullptr)
-    return val == 0;
+    return false;
   const uint16_t old = *p;
   if (addr == REG_CMD_BASE + 0)
     this->onCounterWrite(val);
@@ -101,6 +99,66 @@ bool HoermannGarageEngine::regSet(uint16_t addr, uint16_t val)
     this->onRegSevenChanged(old, val);
   *p = val;
   return true;
+}
+
+/**
+ * Wie setMultipleWords() je Register: schreiben und zurueckpruefen. Ein nicht
+ * vorhandenes Register nimmt nichts an und liest sich als 0, der Schreibzugriff
+ * gilt daher nur dann als erfolgreich, wenn der Wert ohnehin 0 war.
+ */
+bool HoermannGarageEngine::regSetChecked(uint16_t addr, uint16_t val)
+{
+  this->regWrite(addr, val);
+  return this->regGet(addr) == val;
+}
+
+/**
+ * Entspricht dem frueheren onRequest-Rueckruf. Die Bibliothek rief ihn fuer
+ * jeden Funktionscode auf, den sie selbst kannte, und zwar vor jeder Pruefung.
+ */
+void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2)
+{
+  this->state->recordModbusResponse();
+  if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x02 && a1 == REG_RESP_BASE && c1 == 0x08)
+  {
+    this->regResp[0] = 0x0000;
+    this->regResp[1] = 0x0001;
+    setCommandValuesToRead();
+    this->regResp[4] = 0x0000;
+    this->regResp[5] = 0x0000;
+    this->regResp[6] = 0x0000;
+    this->regResp[7] = 0x0000;
+  }
+  else if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x02 && a1 == REG_RESP_BASE && c1 == 0x02)
+  {
+    this->regResp[0] = 0x0004;
+    this->regResp[1] = 0x0000;
+    ESP_LOGD(TAG_HCI, "executing empty command");
+  }
+  else if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x03 && a1 == REG_RESP_BASE && c1 == 0x05)
+  {
+    ESP_LOGD(TAG_HCI, "executing busscan");
+    this->regResp[0] = 0x0000;
+    this->regResp[1] = 0x0005;
+    this->regResp[2] = 0x0430;
+    this->regResp[3] = 0x10ff;
+    this->regResp[4] = 0xa845;
+  }
+  else if (fc == 0x10 && a1 == REG_BCAST_BASE)
+  {
+    // Zustandsmeldung des Antriebs, nichts vorzubereiten
+  }
+  else
+  {
+    // Die Urfassung baute hier "unknown function code fc=" + fc zusammen. Das
+    // war Zeigerarithmetik auf dem Literal und ergab nie den Funktionscode,
+    // sondern ein abgeschnittenes Reststueck. Wir melden denselben Anlass mit
+    // einem festen Text.
+    this->state->debugMessage = "unknown function code";
+    this->state->debMessage = true;
+    ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
+  }
+  this->state->setValid(true);
 }
 
 static inline uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] << 8) | p[1]; }
@@ -117,25 +175,33 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
 {
   const uint8_t fc = req[1];
 
-  // Ausnahmeantwort im Modbus-Format: Adresse, Funktionscode mit gesetztem
-  // hoechsten Bit, Fehlercode.
+  // Ausnahmeantwort. Die abgeloeste Bibliothek rechnete fn + 0x80 statt
+  // fn | 0x80; bei Funktionscodes ab 0x80 laeuft das ueber. Nachgebildet,
+  // damit auch unsinnige Anfragen dieselben Bytes bekommen.
   auto except = [&](uint8_t code) -> size_t
   {
     resp[0] = req[0];
-    resp[1] = (uint8_t)(fc | 0x80);
+    resp[1] = (uint8_t)(fc + 0x80);
     resp[2] = code;
     return 3;
   };
+  // REPLY_ECHO: die Bibliothek sendete die empfangene PDU unveraendert zurueck.
+  auto echo = [&]() -> size_t
+  {
+    memcpy(resp, req, len);
+    return len;
+  };
+  // Die Bibliothek las diese Felder ohne Laengenpruefung. Wir fuellen mit
+  // Nullen auf, statt ueber das Telegramm hinaus zu lesen.
+  const uint16_t f1 = len >= 4 ? rd16(req + 2) : 0;
+  const uint16_t f2 = len >= 6 ? rd16(req + 4) : 0;
 
   if (fc == 0x17)
   {
-    // Wie zuvor: die Bibliothek rief den Rueckruf nur fuer Telegramme auf,
-    // die sie selbst behandelt, und dort vor jeder Pruefung.
-    this->state->recordModbusResponse();
     if (len < 11)
     {
-      this->state->setValid(true);
-      return except(EX_ILLEGAL_VALUE);  // zu kurz zum Auswerten, aber ein bekannter Funktionscode
+      this->onRequestHook(fc, f1, f2, 0, 0);
+      return except(EX_ILLEGAL_VALUE);
     }
     const uint16_t readAddr = rd16(req + 2);
     const uint16_t readCnt = rd16(req + 4);
@@ -144,56 +210,25 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     const uint8_t byteCnt = req[10];
     const uint8_t *wdata = req + 11;
 
-    // --- Schritt 1: Antwortregister vorbelegen (entspricht onRequest) ---
-    if (writeAddr == REG_CMD_BASE && writeCnt == 0x02 && readAddr == REG_RESP_BASE && readCnt == 0x08)
-    {
-      this->regResp[0] = 0x0000;
-      this->regResp[1] = 0x0001;
-      setCommandValuesToRead();
-      this->regResp[4] = 0x0000;
-      this->regResp[5] = 0x0000;
-      this->regResp[6] = 0x0000;
-      this->regResp[7] = 0x0000;
-    }
-    else if (writeAddr == REG_CMD_BASE && writeCnt == 0x02 && readAddr == REG_RESP_BASE && readCnt == 0x02)
-    {
-      this->regResp[0] = 0x0004;
-      this->regResp[1] = 0x0000;
-      ESP_LOGD(TAG_HCI, "executing empty command");
-    }
-    else if (writeAddr == REG_CMD_BASE && writeCnt == 0x03 && readAddr == REG_RESP_BASE && readCnt == 0x05)
-    {
-      ESP_LOGD(TAG_HCI, "executing busscan");
-      this->regResp[0] = 0x0000;
-      this->regResp[1] = 0x0005;
-      this->regResp[2] = 0x0430;
-      this->regResp[3] = 0x10ff;
-      this->regResp[4] = 0xa845;
-    }
-    else
-    {
-      ESP_LOGW(TAG_HCI, "unexpected 0x17 read=%04x/%u write=%04x/%u", readAddr, readCnt, writeAddr, writeCnt);
-    }
+    this->onRequestHook(fc, readAddr, readCnt, writeAddr, writeCnt);
 
-    this->state->setValid(true);
-
-    // --- Schritt 2: dieselben Pruefungen wie die fruehere Bibliothek ---
+    // Genau die Pruefung der Bibliothek. Sie testete den Lesebereich zweimal
+    // und den Schreibbereich gar nicht; das ist hier absichtlich uebernommen.
     if (readCnt < 1 || readCnt > MODBUS_MAX_WORDS || writeCnt < 1 || writeCnt > MODBUS_MAX_WORDS ||
-        (0xFFFF - readAddr) < readCnt || (0xFFFF - writeAddr) < writeCnt || byteCnt != 2 * writeCnt ||
-        len < (size_t)(11 + byteCnt))
+        (0xFFFF - readAddr) < readCnt || byteCnt != 2 * writeCnt)
+      return except(EX_ILLEGAL_VALUE);
+    // Zusatz: die Bibliothek las hier ueber das Telegramm hinaus.
+    if (len < (size_t)(11 + byteCnt))
       return except(EX_ILLEGAL_VALUE);
 
-    // --- Schritt 3: Schreibzugriffe uebernehmen (setMultipleWords) ---
     bool write_ok = true;
     for (uint16_t i = 0; i < writeCnt; i++)
-      if (!this->regSet((uint16_t)(writeAddr + i), rd16(wdata + 2 * i)))
+      if (!this->regSetChecked((uint16_t)(writeAddr + i), rd16(wdata + 2 * i)))
         write_ok = false;
     if (!write_ok)
       return except(EX_SLAVE_FAILURE);
 
-    // --- Schritt 4: antworten (readWords ohne MODBUS_STRICT_REG) ---
-    // Nur das erste Register muss existieren, darueber hinaus werden Nullen
-    // geliefert.
+    // readWords ohne MODBUS_STRICT_REG: nur das erste Register muss es geben.
     if (!this->regExists(readAddr))
       return except(EX_ILLEGAL_ADDRESS);
     size_t n = 0;
@@ -210,25 +245,34 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
 
   if (fc == 0x10)
   {
-    this->state->recordModbusResponse();
-    this->state->setValid(true);
     if (len < 7)
+    {
+      this->onRequestHook(fc, f1, f2, 0, 0);
       return except(EX_ILLEGAL_VALUE);
+    }
     const uint16_t addr = rd16(req + 2);
     const uint16_t cnt = rd16(req + 4);
     const uint8_t byteCnt = req[6];
     const uint8_t *wdata = req + 7;
 
-    if (cnt < 1 || cnt > MODBUS_MAX_WORDS || (0xFFFF - addr) < cnt || byteCnt != 2 * cnt ||
-        len < (size_t)(7 + byteCnt))
+    this->onRequestHook(fc, addr, cnt, 0, 0);
+
+    if (cnt < 1 || cnt > MODBUS_MAX_WORDS || (0xFFFF - addr) < cnt || byteCnt != 2 * cnt)
       return except(EX_ILLEGAL_VALUE);
-    // Hier verlangte die Bibliothek jedes einzelne Register.
     for (uint16_t i = 0; i < cnt; i++)
       if (!this->regExists((uint16_t)(addr + i)))
         return except(EX_ILLEGAL_ADDRESS);
+    // Zusatz nach der Adresspruefung, damit die Reihenfolge der Fehlercodes
+    // dieselbe bleibt.
+    if (len < (size_t)(7 + byteCnt))
+      return except(EX_ILLEGAL_VALUE);
 
+    bool write_ok = true;
     for (uint16_t i = 0; i < cnt; i++)
-      this->regSet((uint16_t)(addr + i), rd16(wdata + 2 * i));
+      if (!this->regSetChecked((uint16_t)(addr + i), rd16(wdata + 2 * i)))
+        write_ok = false;
+    if (!write_ok)
+      return except(EX_SLAVE_FAILURE);
 
     size_t n = 0;
     resp[n++] = req[0];
@@ -238,9 +282,78 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     return n;
   }
 
-  this->state->debugMessage = "unknown function code";  // Zeiger auf Literal, keine Zuweisung auf dem Heap
-  this->state->debMessage = true;
-  ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
+  if (fc == 0x03)  // Halteregister lesen
+  {
+    this->onRequestHook(fc, f1, f2, 0, 0);
+    if (f2 < 1 || f2 > MODBUS_MAX_WORDS || (0xFFFF - f1) < f2)
+      return except(EX_ILLEGAL_ADDRESS);
+    if (!this->regExists(f1))
+      return except(EX_ILLEGAL_ADDRESS);
+    size_t n = 0;
+    resp[n++] = req[0];
+    resp[n++] = fc;
+    resp[n++] = (uint8_t)(f2 * 2);
+    for (uint16_t i = 0; i < f2; i++)
+    {
+      wr16(resp + n, this->regGet((uint16_t)(f1 + i)));
+      n += 2;
+    }
+    return n;
+  }
+
+  if (fc == 0x06)  // einzelnes Halteregister schreiben
+  {
+    this->onRequestHook(fc, f1, f2, 0, 0);
+    if (!this->regWrite(f1, f2))
+      return except(EX_ILLEGAL_ADDRESS);
+    if (this->regGet(f1) != f2)
+      return except(EX_SLAVE_FAILURE);
+    return echo();
+  }
+
+  if (fc == 0x16)  // Register mit Maske schreiben
+  {
+    const uint16_t f3 = len >= 8 ? rd16(req + 6) : 0;
+    this->onRequestHook(fc, f1, f2, f3, 0);
+    const uint16_t cur = this->regGet(f1);
+    const uint16_t nv = (uint16_t)((cur & f2) | (f3 & (uint16_t)~f2));
+    if (!this->regWrite(f1, nv))
+      return except(EX_ILLEGAL_ADDRESS);
+    if (this->regGet(f1) != nv)
+      return except(EX_SLAVE_FAILURE);
+    return echo();
+  }
+
+  // Spulen, Eingangsstatus und Eingangsregister gab es nie. Die Bibliothek
+  // bediente diese Funktionscodes zwar, kam aber immer bei derselben Ausnahme
+  // heraus, weil die Registersuche scheiterte.
+  if (fc == 0x01 || fc == 0x02 || fc == 0x04)
+  {
+    this->onRequestHook(fc, f1, f2, 0, 0);
+    return except(EX_ILLEGAL_ADDRESS);
+  }
+
+  if (fc == 0x05)  // einzelne Spule schreiben
+  {
+    this->onRequestHook(fc, f1, f2, 0, 0);
+    if (f2 != 0xFF00 && f2 != 0x0000)
+      return except(EX_ILLEGAL_VALUE);
+    return except(EX_ILLEGAL_ADDRESS);
+  }
+
+  if (fc == 0x0F)  // mehrere Spulen schreiben
+  {
+    this->onRequestHook(fc, f1, f2, 0, 0);
+    uint16_t bytecount_calc = f2 / 8;
+    if (f2 % 8)
+      bytecount_calc++;
+    const uint8_t bc = len >= 7 ? req[6] : 0;
+    if (f2 < 1 || f2 > MODBUS_MAX_BITS || (0xFFFF - f1) < f2 || bc != bytecount_calc)
+      return except(EX_ILLEGAL_VALUE);
+    return except(EX_ILLEGAL_ADDRESS);
+  }
+
+  this->onRequestHook(fc, f1, f2, 0, 0);
   return except(EX_ILLEGAL_FUNCTION);
 }
 
