@@ -74,7 +74,7 @@ public:
     float currentPosition = 0;
     bool lightOn = false;
     bool relayOn = false;
-    bool actuatorError = false;
+    bool actuatorFlag = false;
     State state = CLOSED;
     std::atomic<bool> changed{false};
     float gotoPosition = 0.0f;
@@ -88,7 +88,7 @@ public:
     void setCurrentPosition(float currentPosition);
     void setLigthOn(bool lightOn);
     void setRelayOn(bool relayOn);
-    void setActuatorError(bool actuatorError);
+    void setActuatorFlag(bool actuatorFlag);
     void clearChanged();
     void setState(State state);
     void setValid(bool isValid);

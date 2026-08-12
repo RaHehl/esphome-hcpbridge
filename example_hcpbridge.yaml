@@ -4,7 +4,7 @@ substitutions:
   friendly_name: "Garage Door"
   connection_state: "${name} Connected"
   relay_name: "${friendly_name} Relay state"
-  fault_name: "${friendly_name} Fault"
+  actuator_name: "${friendly_name} Actuator flag"
   serial_name: "${friendly_name} Serial number"
   firmware_name: "${friendly_name} Firmware version"
   light: "${friendly_name} Light"
@@ -52,9 +52,9 @@ binary_sensor:
       id: sensor_relay
       #on_state:
       #create your automation based on Garage Door Relay state
-    actuator_error:
-      name: "${fault_name}"
-      id: sensor_actuator_error
+    actuator_flag:
+      name: "${actuator_name}"
+      id: sensor_actuator_flag
 
 output:
   - platform: hcpbridge

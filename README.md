@@ -106,8 +106,12 @@ The component provides you three sensor.
   It goes off again after twenty seconds without a frame from the drive, so a
   bus that has gone quiet no longer looks like a working one.
 - `relay_state`: Give the status of the option relay (Menu 30) of the HCP.
-- `actuator_error`: The drive's own fault indication, taken from the state it
-  broadcasts anyway. Nothing extra is sent to read it.
+- `actuator_flag`: Two bits the drive reports about its actuator, taken from the
+  state it broadcasts anyway. Nothing extra is sent to read them. What they mean
+  is not established: on at least one drive one of the two is set permanently
+  while the door works normally, so this is **not** a fault indicator and is
+  disabled by default. Enable it only if you are trying to work out what it
+  tracks on your installation.
 ```YAML
 binary_sensor:
   - platform: hcpbridge
@@ -119,9 +123,9 @@ binary_sensor:
       id: sensor_relay
       #on_state:
       #create your automation based on Garage Door Relay state
-    actuator_error:
-      name: "Garage Door Fault"
-      id: sensor_actuator_error
+    actuator_flag:
+      name: "Garage Door Actuator flag"
+      id: sensor_actuator_flag
 ```
 ### Text_sensor
 

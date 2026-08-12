@@ -21,18 +21,18 @@ void HCPBridgeRelaySensor::dump_config(){
     ESP_LOGCONFIG(TAG, "HCPBridgeRelaySensor");
 }
 
-void HCPBridgeActuatorError::setup() {
+void HCPBridgeActuatorFlag::setup() {
     this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); });
     this->publish_state(false);
 }
 
-void HCPBridgeActuatorError::on_event_triggered() {
-    if (this->parent_->engine->state->actuatorError != this->state){
-        this->publish_state(this->parent_->engine->state->actuatorError);
+void HCPBridgeActuatorFlag::on_event_triggered() {
+    if (this->parent_->engine->state->actuatorFlag != this->state){
+        this->publish_state(this->parent_->engine->state->actuatorFlag);
     }
 }
-void HCPBridgeActuatorError::dump_config(){
-    ESP_LOGCONFIG(TAG3, "HCPBridgeActuatorError");
+void HCPBridgeActuatorFlag::dump_config(){
+    ESP_LOGCONFIG(TAG3, "HCPBridgeActuatorFlag");
 }
 
 void HCPBridgeIsConnected::setup() {

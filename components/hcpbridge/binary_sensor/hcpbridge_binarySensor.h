@@ -15,7 +15,7 @@ class HCPBridgeRelaySensor : public binary_sensor::BinarySensor, public Componen
   protected:
     HCPBridge *parent_;
 };
-class HCPBridgeActuatorError : public binary_sensor::BinarySensor, public Component{
+class HCPBridgeActuatorFlag : public binary_sensor::BinarySensor, public Component{
   public:
     void set_hcpbridge_parent(HCPBridge *parent) { this->parent_ = parent; }
     void setup() override;
