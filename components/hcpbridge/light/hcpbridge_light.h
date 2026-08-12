@@ -16,6 +16,8 @@ class HCPBridgeLight : public light::LightOutput, public Component {
   void write_state(light::LightState *state) override;
   void setup() override;
   void on_event_triggered();
+  /** Put the drive's own state back, whatever was published on top of it. */
+  void sync_from_drive();
   void dump_config() override;
   void setup_state(light::LightState *state) { state_ = state; }
 

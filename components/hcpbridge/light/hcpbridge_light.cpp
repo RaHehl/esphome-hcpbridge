@@ -24,18 +24,33 @@ void HCPBridgeLight::write_state(light::LightState *state) {
     this->output_->turn_on();
   else
     this->output_->turn_off();
+
+  // The light component publishes what was asked for, not what happened. With
+  // no drive on the other end that published value is a claim about a lamp
+  // nobody switched: the request was refused, yet Home Assistant shows the
+  // light as on and keeps showing it, because the correction below only runs
+  // when the drive reports something. Put the last thing it did report back.
+  if (!this->parent_->engine->state->valid)
+    this->sync_from_drive();
 }
 
 void HCPBridgeLight::on_event_triggered() {
-  if (this->parent_->engine->state->valid &&
-      this->state_->current_values.is_on() != this->parent_->engine->state->lightOn) {
-    // Adjust the state of the light based on the external lightOn state
-    ESP_LOGD(TAG, "HCPBridgeBinaryLight::update() - adjusting state");
-    if (this->parent_->engine->state->lightOn) {
-      this->state_->turn_on().perform();
-    } else {
-      this->state_->turn_off().perform();
-    }
+  if (!this->parent_->engine->state->valid)
+    return;
+  this->sync_from_drive();
+}
+
+void HCPBridgeLight::sync_from_drive() {
+  if (this->state_ == nullptr)
+    return;
+  const bool driveSaysOn = this->parent_->engine->state->lightOn;
+  if (this->state_->current_values.is_on() == driveSaysOn)
+    return;
+  ESP_LOGD(TAG, "HCPBridgeBinaryLight::update() - adjusting state");
+  if (driveSaysOn) {
+    this->state_->turn_on().perform();
+  } else {
+    this->state_->turn_off().perform();
   }
 }
 
