@@ -39,7 +39,7 @@ HoermannGarageEngine &HoermannGarageEngine::getInstance()
   return instance;
 }
 
-void HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
+bool HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
 {
   this->mb.set_handler([this](const uint8_t *req, size_t len, uint8_t *resp) -> size_t
                        { return this->onFrame(req, len, resp); });
@@ -48,7 +48,7 @@ void HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
     // No port, no task: at top priority it would spin, because poll() returns
     // immediately.
     ESP_LOGE(TAG_HCI, "serial setup failed, bus task not started");
-    return;
+    return false;
   }
 
   xTaskCreatePinnedToCore(
@@ -59,6 +59,12 @@ void HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
       configMAX_PRIORITIES - 1, /* Priority */
       &modBusTask,              /* Task handle */
       1);                       /* Core */
+  if (modBusTask == nullptr)
+  {
+    ESP_LOGE(TAG_HCI, "bus task could not be created");
+    return false;
+  }
+  return true;
 }
 
 void HoermannGarageEngine::handleModbus()
@@ -178,11 +184,11 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
   {
     this->regResp[0] = 0x0004;
     this->regResp[1] = 0x0000;
-    ESP_LOGD(TAG_HCI, "executing empty command");
+    ESP_LOGV(TAG_HCI, "executing empty command");
   }
   else if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x03 && a1 == REG_RESP_BASE && c1 == 0x05)
   {
-    ESP_LOGD(TAG_HCI, "executing busscan");
+    ESP_LOGV(TAG_HCI, "executing busscan");
     this->regResp[0] = 0x0000;
     this->regResp[1] = 0x0005;
     this->regResp[2] = 0x0430;

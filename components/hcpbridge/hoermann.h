@@ -167,7 +167,8 @@ public:
 
     static HoermannGarageEngine& getInstance();
 
-    void setup(int8_t rx, int8_t tx, int8_t rts);
+    /** False when the port or the bus task could not be brought up. */
+    bool setup(int8_t rx, int8_t tx, int8_t rts);
     void handleModbus();
 
     // Answers one complete frame; returns the response length, or 0 to stay

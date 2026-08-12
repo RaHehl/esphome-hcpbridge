@@ -156,3 +156,9 @@ logger:
 # Example configuration entry
 ota:
   - platform: esphome
+    on_begin:
+      then:
+        # Tell the drive before the image is written, not after: writing flash
+        # stops the serial driver, so the bus is unanswered for the whole
+        # transfer and a shutdown handler would be far too late.
+        - lambda: 'id(hcpbridge_id).announce_pause();'

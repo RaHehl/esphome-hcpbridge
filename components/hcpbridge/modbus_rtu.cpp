@@ -59,7 +59,13 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
     // Half duplex transceiver: the driver toggles RTS around transmission.
     uart_set_mode(this->port_, UART_MODE_RS485_HALF_DUPLEX);
   }
-  // Frame end is silence on the line. Modbus RTU asks for 3.5 character times;
+  // Frame end is silence on the line. Careful with the unit: the driver takes
+  // BIT times, not character times, so the value below is 10 bits = about
+  // 174 us at this baud rate, not the 1750 us the arithmetic reads like. It has
+  // always been that, and the drive answers within it, so it stays. Raising it
+  // to a true 3.5 characters would be closer to the standard but changes when
+  // we answer, which is not something to alter without a door to try it on.
+  // Modbus RTU asks for 3.5 character times;
   // the replaced library always waited 1750 us. Keeping that longer gap on
   // purpose: a drive pausing mid-frame would otherwise yield two useless halves.
   const uint32_t symbol_us = 11UL * 1000000UL / baud;      // ~11 Bit je Zeichen

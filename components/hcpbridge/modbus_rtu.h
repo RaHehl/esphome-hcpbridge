@@ -31,6 +31,10 @@ static constexpr size_t MODBUS_MAX_FRAME = 256;
 
 // Driver RX FIFO threshold. Frames longer than this arrive split, see poll().
 static constexpr int RX_FULL_THRESHOLD = 120;
+// The largest answer is address, function code, byte count, the words, and the
+// checksum. Growing either limit past the buffer would write into whatever
+// follows it.
+static_assert(3 + 2 * 0x7D + 2 <= 256, "response can exceed the transmit buffer");
 
 class ModbusRtuServer {
  public:

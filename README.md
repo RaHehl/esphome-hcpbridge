@@ -70,6 +70,34 @@ light:
     output: output_light
     name: Garage Door Light
 ```
+### Telling the drive about a restart
+
+The bridge is a bus accessory, and a drive notices one that stops answering. On
+an ordinary restart it says so itself and waits for the drive to confirm before
+going away.
+
+An update is different: writing the new image stops the serial driver from
+running, so the bus is unanswered for the whole transfer, long before any
+shutdown handler runs. To be told in time the drive has to hear it when the
+update starts, which is a trigger on the update platform:
+
+```YAML
+ota:
+  - platform: esphome
+    on_begin:
+      then:
+        - lambda: 'id(hcpbridge_id).announce_pause();'
+```
+
+`id(...)` is the id of the `hcpbridge:` block. Without this the update still
+works; the drive simply sees the accessory vanish and may drop it from its list,
+which then needs a bus scan at the drive to undo.
+
+While at it: `logger:` writes to the serial console by default, and this
+component logs from its own task. On a busy or noisy bus that can hold up an
+answer to the drive. `baud_rate: 0` turns the console off and keeps the network
+log, which is what you want on a device that is not on a desk.
+
 ### Binary_Sensor
 
 The component provides you three sensor.
