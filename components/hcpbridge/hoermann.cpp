@@ -120,11 +120,12 @@ bool HoermannGarageEngine::regSetChecked(uint16_t addr, uint16_t val)
 }
 
 /**
- * A frame we have no branch for. We answer it with an answer code of zero,
- * which the protocol does not define, so knowing the exact shape matters more
- * than knowing that it happened. Repeats are throttled, but a shape we have
- * not seen before is always reported: the interesting ones appear in bursts
- * while the drive takes an accessory back on the bus.
+ * A frame we have no branch for. It is answered with a plain status and an
+ * empty payload, so the shape is the only thing worth knowing about it: it is
+ * what a missing branch would have to be written against. Repeats are
+ * throttled, but a shape not seen before is always reported, because the
+ * interesting ones arrive in bursts while the drive takes an accessory back
+ * onto the bus.
  */
 void HoermannGarageEngine::reportUnknownShape(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2,
                                               uint16_t c2)
@@ -230,6 +231,10 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
     // command bits would look like a key press.
     for (uint8_t i = 0; i < REG_RESP_COUNT; i++)
       this->regResp[i] = 0x0000;
+    // A transfer we understand is answered by onWriteBlockComplete further on,
+    // which overwrites this. What is left here is a transfer we do not, and
+    // that still has to carry a defined answer code rather than a zero.
+    this->regResp[1] = RESP_STATUS;
   }
   else if (fc == 0x10 && a1 == REG_BCAST_BASE)
   {
@@ -243,6 +248,11 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
     // time. Zeroing also turns the OR in onCounterWrite into a plain write.
     for (uint8_t i = 0; i < REG_RESP_COUNT; i++)
       this->regResp[i] = 0x0000;
+    // Zero is not an answer code the protocol defines, and this block is read
+    // straight back in the same frame, so leaving it at zero means telling the
+    // drive something meaningless. The plain status code says "nothing to
+    // report" with an empty payload, which is what this is.
+    this->regResp[1] = RESP_STATUS;
     this->reportUnknownShape(fc, a1, c1, a2, c2);
   }
   this->state->setValid(true);
@@ -651,7 +661,7 @@ void HoermannGarageEngine::onRegSevenChanged(uint16_t oldVal, uint16_t val)
     // Bits 4 and 5 of the high byte are the drive's own fault indication. They
     // are reported whether or not the relay bit below means anything on this
     // installation.
-    this->state->setActuatorError((val & 0x3000) != 0);
+    this->state->setActuatorFlag((val & 0x3000) != 0);
     // 0x02 happen when relay menu 30 is set to 06, 07, 10 
     this->state->setRelayOn((val & 0xFF00) >> 8 == 0x02);
   }
@@ -1047,11 +1057,11 @@ void HoermannState::setState(State state)
   if (was_moving && !isMoving(state))
     this->gotoPosition = 0.0f;
 }
-void HoermannState::setActuatorError(bool actuatorError)
+void HoermannState::setActuatorFlag(bool actuatorFlag)
 {
-  if (this->actuatorError == actuatorError)
+  if (this->actuatorFlag == actuatorFlag)
     return;
-  this->actuatorError = actuatorError;
+  this->actuatorFlag = actuatorFlag;
   this->changed = true;
 }
 
