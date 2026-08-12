@@ -97,6 +97,11 @@ public:
 
 };
 
+// A command is only done once the drive has acted on it. If nothing has changed
+// by the first mark, send it once more; give up at the second and say so.
+#define CMD_CONFIRM_MS 2000
+#define CMD_GIVEUP_MS 5000
+
 // Hoermann bus register blocks: the drive writes commands to 0x9C41 and its
 // state to 0x9D31, and reads our answer from 0x9CB9.
 #define REG_CMD_BASE 0x9C41
@@ -243,6 +248,19 @@ private:
     uint16_t regBcast[REG_BCAST_COUNT] = {0};     // 0x9D31, drive state
     uint16_t regResp[REG_RESP_COUNT] = {0};       // 0x9CB9, unsere Antwort
     std::atomic<const HoermannCommand *> nextCommand{nullptr};  // shared with the bus task
+
+    // Bus task only. What was sent and what the door looked like at the time,
+    // so the effect can be recognised and the command sent again if there was
+    // none. A repeat needs no slot of its own now that a command is one frame.
+    const HoermannCommand *awaitedCommand = nullptr;
+    const HoermannCommand *repeatCommand = nullptr;
+    uint32_t awaitedSince = 0;
+    uint8_t awaitedRepeats = 0;
+    HoermannState::State stateWhenSent = HoermannState::CLOSED;
+    bool lightWhenSent = false;
+
+    bool commandTookEffect() const;
+    void checkCommandEffect();
 
     // Identity exchange. The drive only ever answers a request that rode along
     // with a poll, and it takes the request out of the answer slot again, so a

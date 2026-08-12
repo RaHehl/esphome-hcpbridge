@@ -442,21 +442,91 @@ static void activeCommandValues(const HoermannCommand *cmd, uint16_t *v2, uint16
 
 void HoermannGarageEngine::setCommandValuesToRead()
 {
+  // Runs here, in the task that owns all of this, and it can arm a repeat,
+  // which must not be decided from a half read state.
+  this->checkCommandEffect();
+
   uint16_t regPlug2Value = 0x0000;
   uint16_t regPlug3Value = 0x0000;
 
   // Written once, then gone: the answer is rebuilt from nothing on every poll,
-  // so a command that is not put back in is simply not there any more. No
-  // timer, and nothing to hold or release.
+  // so a command that is not put back in is simply not there any more.
   const HoermannCommand *cmd = this->nextCommand.load();
   if (cmd != nullptr)
   {
+    // A press always wins over a repeat of our own.
+    this->repeatCommand = nullptr;
     activeCommandValues(cmd, &regPlug2Value, &regPlug3Value);
     ESP_LOGI(TAG_HCI, "command %x %x", regPlug2Value, regPlug3Value);
     this->nextCommand.store(nullptr);
+    // Start watching for the effect.
+    this->awaitedCommand = cmd;
+    this->awaitedSince = esphome::millis();
+    this->awaitedRepeats = 0;
+    this->stateWhenSent = this->state->state;
+    this->lightWhenSent = this->state->lightOn;
+  }
+  else if (this->repeatCommand != nullptr)
+  {
+    activeCommandValues(this->repeatCommand, &regPlug2Value, &regPlug3Value);
+    ESP_LOGI(TAG_HCI, "repeating command %x %x", regPlug2Value, regPlug3Value);
+    this->repeatCommand = nullptr;
   }
   this->regResp[2] = regPlug2Value;
   this->regResp[3] = regPlug3Value;
+}
+
+// Did the door do what it was told? A direction that is already reached counts,
+// otherwise pressing "open" on an open door would look like a failure.
+bool HoermannGarageEngine::commandTookEffect() const
+{
+  const HoermannCommand *cmd = this->awaitedCommand;
+  const HoermannState::State now = this->state->state;
+  if (cmd == &HoermannCommand::STARTOPENDOOR)
+    return now == HoermannState::OPENING || now == HoermannState::OPEN;
+  if (cmd == &HoermannCommand::STARTCLOSEDOOR)
+    return now == HoermannState::CLOSING || now == HoermannState::CLOSED;
+  if (cmd == &HoermannCommand::STARTOPENDOORHALF)
+    return now == HoermannState::MOVE_HALF || now == HoermannState::HALFOPEN;
+  if (cmd == &HoermannCommand::STARTVENTPOSITION)
+    return now == HoermannState::MOVE_VENTING || now == HoermannState::VENT;
+  if (cmd == &HoermannCommand::STARTTOGGLELAMP)
+    return this->state->lightOn != this->lightWhenSent;
+  // An impulse has no destination of its own; any change is the answer.
+  return now != this->stateWhenSent;
+}
+
+void HoermannGarageEngine::checkCommandEffect()
+{
+  if (this->awaitedCommand == nullptr)
+    return;
+  if (this->commandTookEffect())
+  {
+    this->awaitedCommand = nullptr;
+    return;
+  }
+  // A press the caller queued in the meantime takes over; repeating an old one
+  // on top of it would be a second press nobody asked for.
+  if (this->nextCommand.load() != nullptr)
+  {
+    this->awaitedCommand = nullptr;
+    this->repeatCommand = nullptr;
+    return;
+  }
+  // Subtract, never add: adding overflows when millis() wraps.
+  const uint32_t waited = esphome::millis() - this->awaitedSince;
+  if (waited > CMD_GIVEUP_MS)
+  {
+    ESP_LOGW(TAG_HCI, "drive did not act on command %x",
+             this->awaitedCommand->commandEndPlus2Value);
+    this->awaitedCommand = nullptr;
+    return;
+  }
+  if (waited > CMD_CONFIRM_MS && this->awaitedRepeats == 0)
+  {
+    this->awaitedRepeats = 1;
+    this->repeatCommand = this->awaitedCommand;
+  }
 }
 
 void HoermannGarageEngine::onDoorPositonChanged(uint16_t oldVal, uint16_t val)
