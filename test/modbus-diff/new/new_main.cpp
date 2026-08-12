@@ -31,7 +31,7 @@ int main() {
       static const HoermannCommand *cmds[7] = {
           &HoermannCommand::STARTOPENDOOR, &HoermannCommand::STARTCLOSEDOOR,
           &HoermannCommand::STARTIMPULSE,  &HoermannCommand::STARTOPENDOORHALF,
-          &HoermannCommand::STARTVENTPOSITION, &HoermannCommand::STARTTOGGLELAMP,
+          &HoermannCommand::STARTVENTPOSITION, &HoermannCommand::LAMPON,
           &HoermannCommand::WAITING};
       e.setCommand(true, cmds[strtol(line.c_str() + 1, nullptr, 10) % 7]);
       continue;

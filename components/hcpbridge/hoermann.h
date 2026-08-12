@@ -31,7 +31,8 @@ public:
     static const HoermannCommand STARTIMPULSE;
     static const HoermannCommand STARTOPENDOORHALF;
     static const HoermannCommand STARTVENTPOSITION;
-    static const HoermannCommand STARTTOGGLELAMP;
+    static const HoermannCommand LAMPON;
+    static const HoermannCommand LAMPOFF;
     static const HoermannCommand WAITING;
 
 public:
@@ -298,7 +299,6 @@ private:
     // The drive's own state word, not our translation of it: a code we do not
     // translate must still count as the drive having reacted.
     uint16_t rawStateWhenSent = 0;
-    bool lightWhenSent = false;
 
     // Measurement only, not part of the protocol. Records how the counter byte
     // in the drive's requests moves from one frame to the next, which is the

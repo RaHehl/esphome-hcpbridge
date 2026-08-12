@@ -18,7 +18,13 @@ const HoermannCommand HoermannCommand::STARTCLOSEDOOR = HoermannCommand(0x0220, 
 const HoermannCommand HoermannCommand::STARTIMPULSE = HoermannCommand(0x0240, 0x0140, 0x0000, 0x0000);
 const HoermannCommand HoermannCommand::STARTOPENDOORHALF = HoermannCommand(0x0200, 0x0100, 0x0400, 0x0400);
 const HoermannCommand HoermannCommand::STARTVENTPOSITION = HoermannCommand(0x0200, 0x0100, 0x4000, 0x4000);
-const HoermannCommand HoermannCommand::STARTTOGGLELAMP = HoermannCommand(0x0100, 0x0800, 0x0200, 0x0200);
+// Light is not a key press but a state, and it has one command per direction.
+// Class 0x08 in the high byte says light, then 0x80 turns it on and 0x01 in the
+// next register turns it off. The single toggle this replaces could only ever
+// mean "the other one", which made a repeat undo itself and made "on" something
+// we could not actually ask for.
+const HoermannCommand HoermannCommand::LAMPON = HoermannCommand(0x0880, 0x0880, 0x0000, 0x0000);
+const HoermannCommand HoermannCommand::LAMPOFF = HoermannCommand(0x0800, 0x0800, 0x0100, 0x0100);
 const HoermannCommand HoermannCommand::WAITING = HoermannCommand(0x0000, 0x0000, 0x0000, 0x0000);
 
 TaskHandle_t modBusTask;
@@ -276,34 +282,10 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
 
   const uint8_t fc = req[1];
 
-  // The replaced library computed fn + 0x80, not fn | 0x80, which overflows
-  // from function code 0x80 up. Kept so even nonsense requests get the same
-  // bytes.
-  auto except = [&](uint8_t code) -> size_t
-  {
-    resp[0] = req[0];
-    resp[1] = (uint8_t)(fc + 0x80);
-    resp[2] = code;
-    return 3;
-  };
-  // REPLY_ECHO: the library sent the received PDU back untouched.
-  auto echo = [&]() -> size_t
-  {
-    memcpy(resp, req, len);
-    return len;
-  };
-  // The library read these fields without a length check; zero-fill instead of
-  // reading past the frame.
-  const uint16_t f1 = len >= 4 ? rd16(req + 2) : 0;
-  const uint16_t f2 = len >= 6 ? rd16(req + 4) : 0;
-
   if (fc == 0x17)
   {
     if (len < 11)
-    {
-      this->onRequestHook(fc, f1, f2, 0, 0);
-      return except(EX_ILLEGAL_VALUE);
-    }
+      return 0;
     const uint16_t readAddr = rd16(req + 2);
     const uint16_t readCnt = rd16(req + 4);
     const uint16_t writeAddr = rd16(req + 6);
@@ -311,48 +293,50 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     const uint8_t byteCnt = req[10];
     const uint8_t *wdata = req + 11;
 
-    // The two blocks sit at one address each and nowhere else. Letting a frame
-    // through that names a different one would shift the whole payload by a
-    // register: the counter would be read as a command, and a command as a
-    // position. Checked before anything is stored, and before the counter is
-    // looked at, so a frame like that cannot reach any state at all.
+    // Everything is checked here, before a single byte is stored or an answer
+    // begun. Two reasons, and the second one is the reason the order changed.
+    //
+    // A frame that fails any of this gets no answer at all. There is no answer
+    // code meaning "your frame was wrong", and a Modbus exception is a thing
+    // the drive never hears from the accessory this protocol was built around.
+    // Silence is the defined response to a frame that does not parse.
+    //
+    // And building the answer first meant taking a command out of the queue and
+    // then throwing the frame away with it, so a malformed frame could swallow
+    // a key press.
     if (readAddr != REG_RESP_BASE || writeAddr != REG_CMD_BASE)
     {
+      // One address each and nowhere else. A frame naming another would shift
+      // the whole payload by a register: the counter read as a command, a
+      // command as a position.
       ESP_LOGW(TAG_HCI, "frame names read %04x write %04x, expected %04x and %04x", readAddr,
                writeAddr, REG_RESP_BASE, REG_CMD_BASE);
-      return except(EX_ILLEGAL_ADDRESS);
+      return 0;
     }
+    if (readCnt < 1 || readCnt > MODBUS_MAX_WORDS || writeCnt < 1 ||
+        (0xFFFF - readAddr) < readCnt || byteCnt != 2 * writeCnt)
+      return 0;
+    // Two to eighteen bytes, i.e. one to nine registers. Anything longer has no
+    // room in the block it is written to.
+    if (byteCnt < 2 || byteCnt > 2 * REG_CMD_COUNT)
+      return 0;
+    if (len < (size_t)(11 + byteCnt))
+      return 0;
+    if (!this->regExists(readAddr))
+      return 0;
 
-    // Whether the previous answer arrived decides whether a command has to go
-    // back into the queue, and the hook is where the queue is read, so this
-    // comes first. The high byte of the first written register is the counter,
-    // the low byte the command.
-    const bool countedFrame = writeCnt >= 1 && len >= 13;
-    if (countedFrame)
-      this->syncCounter(wdata[0]);
+    // The counter says whether the previous answer arrived, and that decides
+    // whether a command goes back into the queue, so it comes before the hook
+    // that reads the queue. High byte of the first written register is the
+    // counter, the low byte the command.
+    this->syncCounter(wdata[0]);
 
     this->onRequestHook(fc, readAddr, readCnt, writeAddr, writeCnt);
 
-    // Exactly the library's check: it tested the read range twice and the
-    // write range not at all. Reproduced on purpose.
-    if (readCnt < 1 || readCnt > MODBUS_MAX_WORDS || writeCnt < 1 || writeCnt > MODBUS_MAX_WORDS ||
-        (0xFFFF - readAddr) < readCnt || byteCnt != 2 * writeCnt)
-      return except(EX_ILLEGAL_VALUE);
-    // Added: the library read past the frame here.
-    if (len < (size_t)(11 + byteCnt))
-      return except(EX_ILLEGAL_VALUE);
-
-    bool write_ok = true;
     for (uint16_t i = 0; i < writeCnt; i++)
-      if (!this->regSetChecked((uint16_t)(writeAddr + i), rd16(wdata + 2 * i)))
-        write_ok = false;
-    if (!write_ok)
-      return except(EX_SLAVE_FAILURE);
+      this->regSetChecked((uint16_t)(writeAddr + i), rd16(wdata + 2 * i));
     this->onWriteBlockComplete(writeAddr, writeCnt);
 
-    // readWords without MODBUS_STRICT_REG: only the first register must exist.
-    if (!this->regExists(readAddr))
-      return except(EX_ILLEGAL_ADDRESS);
     size_t n = 0;
     resp[n++] = req[0];
     resp[n++] = fc;
@@ -363,56 +347,45 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
       n += 2;
     }
     // An answer is on its way out, so the count moves on. Only here: a frame
-    // that ended in an exception was never answered with one.
+    // that was dropped above never got one.
     //
     // What goes into the answer stays the drive's own byte, mirrored back. Our
     // count is that byte carried forward and would put the same value there,
     // so sending it instead would only add a way to get it wrong.
-    if (countedFrame)
-      this->advanceCounter();
+    this->advanceCounter();
     return n;
   }
 
   if (fc == 0x10)
   {
     if (len < 7)
-    {
-      this->onRequestHook(fc, f1, f2, 0, 0);
-      return except(EX_ILLEGAL_VALUE);
-    }
+      return 0;
     const uint16_t addr = rd16(req + 2);
     const uint16_t cnt = rd16(req + 4);
     const uint8_t byteCnt = req[6];
     const uint8_t *wdata = req + 7;
 
-    // Same reasoning as for the read/write frame: the drive state block has one
-    // address. A frame naming another one would land the door state where the
-    // position is read from. Broadcasts are never answered anyway, so this only
-    // stops it from being stored.
+    // Same as above: checked in full before anything is stored, and dropped
+    // without a word when it fails. The state block has one address, and a
+    // frame naming another would land the door state where the position is
+    // read from.
     if (addr != REG_BCAST_BASE)
     {
       ESP_LOGW(TAG_HCI, "broadcast names %04x, expected %04x", addr, REG_BCAST_BASE);
-      return except(EX_ILLEGAL_ADDRESS);
+      return 0;
     }
+    if (cnt < 1 || byteCnt != 2 * cnt || byteCnt < 2 || byteCnt > 2 * REG_BCAST_COUNT)
+      return 0;
+    if (len < (size_t)(7 + byteCnt))
+      return 0;
 
     this->onRequestHook(fc, addr, cnt, 0, 0);
 
-    if (cnt < 1 || cnt > MODBUS_MAX_WORDS || (0xFFFF - addr) < cnt || byteCnt != 2 * cnt)
-      return except(EX_ILLEGAL_VALUE);
     for (uint16_t i = 0; i < cnt; i++)
-      if (!this->regExists((uint16_t)(addr + i)))
-        return except(EX_ILLEGAL_ADDRESS);
-    // Added after the address check so the exception codes keep their order.
-    if (len < (size_t)(7 + byteCnt))
-      return except(EX_ILLEGAL_VALUE);
+      this->regSetChecked((uint16_t)(addr + i), rd16(wdata + 2 * i));
 
-    bool write_ok = true;
-    for (uint16_t i = 0; i < cnt; i++)
-      if (!this->regSetChecked((uint16_t)(addr + i), rd16(wdata + 2 * i)))
-        write_ok = false;
-    if (!write_ok)
-      return except(EX_SLAVE_FAILURE);
-
+    // Built for completeness; the frame layer never sends an answer to a
+    // broadcast.
     size_t n = 0;
     resp[n++] = req[0];
     resp[n++] = fc;
@@ -421,93 +394,15 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     return n;
   }
 
-  if (fc == 0x03)  // Halteregister lesen
-  {
-    this->onRequestHook(fc, f1, f2, 0, 0);
-    if (f2 < 1 || f2 > MODBUS_MAX_WORDS || (0xFFFF - f1) < f2)
-      return except(EX_ILLEGAL_ADDRESS);
-    if (!this->regExists(f1))
-      return except(EX_ILLEGAL_ADDRESS);
-    size_t n = 0;
-    resp[n++] = req[0];
-    resp[n++] = fc;
-    resp[n++] = (uint8_t)(f2 * 2);
-    for (uint16_t i = 0; i < f2; i++)
-    {
-      wr16(resp + n, this->regGet((uint16_t)(f1 + i)));
-      n += 2;
-    }
-    return n;
-  }
-
-  if (fc == 0x06)  // einzelnes Halteregister schreiben
-  {
-    this->onRequestHook(fc, f1, f2, 0, 0);
-    if (!this->regWrite(f1, f2))
-      return except(EX_ILLEGAL_ADDRESS);
-    if (this->regGet(f1) != f2)
-      return except(EX_SLAVE_FAILURE);
-    return echo();
-  }
-
-  if (fc == 0x16)  // Register mit Maske schreiben
-  {
-    const uint16_t f3 = len >= 8 ? rd16(req + 6) : 0;
-    this->onRequestHook(fc, f1, f2, f3, 0);
-    const uint16_t cur = this->regGet(f1);
-    const uint16_t nv = (uint16_t)((cur & f2) | (f3 & (uint16_t)~f2));
-    if (!this->regWrite(f1, nv))
-      return except(EX_ILLEGAL_ADDRESS);
-    if (this->regGet(f1) != nv)
-      return except(EX_SLAVE_FAILURE);
-    return echo();
-  }
-
-  if (fc == 0x14 || fc == 0x15)  // Dateisaetze lesen bzw. schreiben
-  {
-    // The only codes without the onRequest hook: the library jumped straight
-    // into validation, so no setValid here either.
-    const uint8_t n = len >= 3 ? req[2] : 0;  // Laengenbyte der Anfrage
-    const uint8_t lo = fc == 0x14 ? 0x07 : 0x09;
-    const uint8_t hi = fc == 0x14 ? 0xF5 : 0xFB;
-    if (n < lo || n > hi)
-      return except(EX_ILLEGAL_VALUE);
-    // No file handler was ever registered, so the library always ended here
-    // whatever the content - reproducible without copying its out-of-bounds
-    // reads.
-    return except(EX_ILLEGAL_ADDRESS);
-  }
-
-  // Coils, discrete inputs and input registers never existed here, so the
-  // library served these codes but always failed the register lookup.
-  if (fc == 0x01 || fc == 0x02 || fc == 0x04)
-  {
-    this->onRequestHook(fc, f1, f2, 0, 0);
-    return except(EX_ILLEGAL_ADDRESS);
-  }
-
-  if (fc == 0x05)  // einzelne Spule schreiben
-  {
-    this->onRequestHook(fc, f1, f2, 0, 0);
-    if (f2 != 0xFF00 && f2 != 0x0000)
-      return except(EX_ILLEGAL_VALUE);
-    return except(EX_ILLEGAL_ADDRESS);
-  }
-
-  if (fc == 0x0F)  // mehrere Spulen schreiben
-  {
-    this->onRequestHook(fc, f1, f2, 0, 0);
-    uint16_t bytecount_calc = f2 / 8;
-    if (f2 % 8)
-      bytecount_calc++;
-    const uint8_t bc = len >= 7 ? req[6] : 0;
-    if (f2 < 1 || f2 > MODBUS_MAX_BITS || (0xFFFF - f1) < f2 || bc != bytecount_calc)
-      return except(EX_ILLEGAL_VALUE);
-    return except(EX_ILLEGAL_ADDRESS);
-  }
-
-  this->onRequestHook(fc, f1, f2, 0, 0);
-  return except(EX_ILLEGAL_FUNCTION);
+  // Two function codes exist on this bus and there are no others. Anything else
+  // is dropped without a word, exactly like a frame that fails to parse.
+  //
+  // The replaced library answered a whole catalogue here, and every one of them
+  // was a liability rather than a feature: read holding registers handed our
+  // entire state to any frame that asked for it, and write single register let
+  // one put an arbitrary value anywhere in it, our own answer block included.
+  // Nothing on this bus ever asks for them.
+  return 0;
 }
 
 // A command occupies one answer and one only. The pair a command carries was
@@ -545,7 +440,6 @@ void HoermannGarageEngine::setCommandValuesToRead()
     this->awaitedRepeats = 0;
     this->stateWhenSent = this->state->state;
     this->rawStateWhenSent = this->regBcast[2];
-    this->lightWhenSent = this->state->lightOn;
   }
   else if (this->repeatCommand != nullptr)
   {
@@ -584,8 +478,10 @@ bool HoermannGarageEngine::commandTookEffect() const
     return now == HoermannState::MOVE_HALF || now == HoermannState::HALFOPEN;
   if (cmd == &HoermannCommand::STARTVENTPOSITION)
     return now == HoermannState::MOVE_VENTING || now == HoermannState::VENT;
-  if (cmd == &HoermannCommand::STARTTOGGLELAMP)
-    return this->state->lightOn != this->lightWhenSent;
+  if (cmd == &HoermannCommand::LAMPON)
+    return this->state->lightOn;
+  if (cmd == &HoermannCommand::LAMPOFF)
+    return !this->state->lightOn;
   return false;
 }
 
@@ -1099,11 +995,12 @@ bool HoermannGarageEngine::ventilationPositionDoor()
 }
 bool HoermannGarageEngine::turnLight(bool on)
 {
-  return setCommand((on && !this->state->lightOn) || (!on && this->state->lightOn), &HoermannCommand::STARTTOGGLELAMP);
+  return setCommand(on != this->state->lightOn,
+                    on ? &HoermannCommand::LAMPON : &HoermannCommand::LAMPOFF);
 }
 bool HoermannGarageEngine::toggleLight()
 {
-  return setCommand(true, &HoermannCommand::STARTTOGGLELAMP);
+  return this->turnLight(!this->state->lightOn);
 }
 bool HoermannGarageEngine::setPosition(int setPosition)
 {
