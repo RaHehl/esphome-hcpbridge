@@ -146,7 +146,9 @@ static_assert(2 + IDENT_FIRMWARE_LEN / 2 <= REG_CMD_COUNT, "firmware payload exc
 // After the pause is confirmed the bus task can still be in the middle of a
 // frame. Restarting into that leaves half a telegram on the wire, which is
 // exactly what makes a drive treat an accessory as faulty.
-#define PAUSE_SETTLE_MS 2000
+#define PAUSE_SETTLE_MS 1000
+// A stretch this long with nothing arriving means no telegram is in flight.
+#define PAUSE_QUIET_MS 40
 
 // The drive polls several times a second. Nothing at all for this long means the
 // link is gone, not that the drive has nothing to say.
@@ -200,6 +202,10 @@ public:
 
     /** Waits out any frame still on the wire before the caller restarts. */
     void settleBeforeRestart();
+
+    /** Prints a finished counter run. Main task: formatting has no business
+     *  inside the window the drive waits for an answer in. */
+    void publishCounterProbe();
 
     /** Drops the connected state once the drive has gone quiet for too long. */
     void checkBusSilence();
@@ -257,6 +263,9 @@ private:
     uint32_t awaitedSince = 0;
     uint8_t awaitedRepeats = 0;
     HoermannState::State stateWhenSent = HoermannState::CLOSED;
+    // The drive's own state word, not our translation of it: a code we do not
+    // translate must still count as the drive having reacted.
+    uint16_t rawStateWhenSent = 0;
     bool lightWhenSent = false;
 
     // Measurement only, not part of the protocol. Records how the counter byte
@@ -266,6 +275,7 @@ private:
     uint8_t counterProbe[COUNTER_PROBE_LEN] = {0};
     uint8_t counterProbeAt = 0;
     uint8_t counterProbeRuns = 0;
+    std::atomic<bool> counterProbeReady{false};
     void probeCounter(uint8_t counterByte);
 
     bool commandTookEffect() const;

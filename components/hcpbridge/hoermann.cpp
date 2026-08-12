@@ -203,8 +203,12 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
   }
   else
   {
-    // The original built "unknown function code fc=" + fc here, which was
-    // pointer arithmetic on the literal and never showed the code.
+    // Nothing here knows what to answer, so nothing may be left standing: the
+    // answer block is read back in the same frame, and a command or a
+    // registration signature from an earlier request would go out a second
+    // time. Zeroing also turns the OR in onCounterWrite into a plain write.
+    for (uint8_t i = 0; i < REG_RESP_COUNT; i++)
+      this->regResp[i] = 0x0000;
     ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
   }
   this->state->setValid(true);
@@ -464,6 +468,7 @@ void HoermannGarageEngine::setCommandValuesToRead()
     this->awaitedSince = esphome::millis();
     this->awaitedRepeats = 0;
     this->stateWhenSent = this->state->state;
+    this->rawStateWhenSent = this->regBcast[2];
     this->lightWhenSent = this->state->lightOn;
   }
   else if (this->repeatCommand != nullptr)
@@ -480,6 +485,14 @@ void HoermannGarageEngine::setCommandValuesToRead()
 // otherwise pressing "open" on an open door would look like a failure.
 bool HoermannGarageEngine::commandTookEffect() const
 {
+  // Anything the drive now says differently is an answer, whatever it means.
+  // Stopping a door that was travelling is a reaction, not a refusal, and a
+  // state code we do not translate must not read as silence either.
+  if (this->regBcast[2] != this->rawStateWhenSent)
+    return true;
+
+  // Otherwise the destination counts, so asking an open door to open is not
+  // taken for a failure.
   const HoermannCommand *cmd = this->awaitedCommand;
   const HoermannState::State now = this->state->state;
   if (cmd == &HoermannCommand::STARTOPENDOOR)
@@ -492,8 +505,7 @@ bool HoermannGarageEngine::commandTookEffect() const
     return now == HoermannState::MOVE_VENTING || now == HoermannState::VENT;
   if (cmd == &HoermannCommand::STARTTOGGLELAMP)
     return this->state->lightOn != this->lightWhenSent;
-  // An impulse has no destination of its own; any change is the answer.
-  return now != this->stateWhenSent;
+  return false;
 }
 
 void HoermannGarageEngine::checkCommandEffect()
@@ -517,8 +529,9 @@ void HoermannGarageEngine::checkCommandEffect()
   const uint32_t waited = esphome::millis() - this->awaitedSince;
   if (waited > CMD_GIVEUP_MS)
   {
-    ESP_LOGW(TAG_HCI, "drive did not act on command %x",
-             this->awaitedCommand->commandEndPlus2Value);
+    uint16_t shown2 = 0, shown3 = 0;
+    activeCommandValues(this->awaitedCommand, &shown2, &shown3);
+    ESP_LOGW(TAG_HCI, "drive did not act on command %x %x", shown2, shown3);
     this->awaitedCommand = nullptr;
     return;
   }
@@ -626,23 +639,31 @@ void HoermannGarageEngine::onRegSevenChanged(uint16_t oldVal, uint16_t val)
 /**
  * Write on 0x9C41 , byte1: counter, byte2: command
  */
-// Measurement only. Collects a run of counter bytes and prints it once, a few
-// times over, so the step between consecutive frames can be read off instead of
-// guessed at. Prints nothing else and changes nothing that goes out.
+// Measurement only. Records a run of counter bytes; the formatting and the log
+// line happen in the main task, because everything in here sits between the
+// drive's request and our answer.
 void HoermannGarageEngine::probeCounter(uint8_t counterByte)
 {
-  if (this->counterProbeRuns >= 4)
+  if (this->counterProbeRuns >= 4 || this->counterProbeReady.load())
     return;
   this->counterProbe[this->counterProbeAt++] = counterByte;
   if (this->counterProbeAt < COUNTER_PROBE_LEN)
+    return;
+  this->counterProbeAt = 0;
+  this->counterProbeRuns++;
+  this->counterProbeReady.store(true);
+}
+
+void HoermannGarageEngine::publishCounterProbe()
+{
+  if (!this->counterProbeReady.load())
     return;
   char line[COUNTER_PROBE_LEN * 3 + 1] = {0};
   size_t at = 0;
   for (uint8_t i = 0; i < COUNTER_PROBE_LEN && at + 1 < sizeof(line); i++)
     at += snprintf(line + at, sizeof(line) - at, "%02x ", this->counterProbe[i]);
   ESP_LOGI(TAG_HCI, "counter run: %s", line);
-  this->counterProbeAt = 0;
-  this->counterProbeRuns++;
+  this->counterProbeReady.store(false);
 }
 
 void HoermannGarageEngine::onCounterWrite(uint16_t val)
@@ -735,8 +756,12 @@ bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
     return false;
 
   // A press that is still waiting is dropped rather than carried over a
-  // restart, where it would arrive with no one expecting it.
+  // restart, where it would arrive with no one expecting it. The watch and any
+  // armed repeat go with it: a repeat firing inside the settle window would
+  // start the door a second before the bridge disappears.
   this->nextCommand.store(nullptr);
+  this->awaitedCommand = nullptr;
+  this->repeatCommand = nullptr;
 
   this->pauseConfirmed.store(false);
   this->pauseRequested.store(true);
@@ -746,26 +771,35 @@ bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
   {
     if (this->pauseConfirmed.load())
     {
-      this->pauseRequested.store(false);
+      // Keep answering the pause while the wire drains. Going back to the
+      // ordinary status here would tell the drive "never mind" for two seconds
+      // and then vanish anyway, which is worse than never saying it.
       this->settleBeforeRestart();
+      this->pauseRequested.store(false);
       return true;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
   }
   // Back to answering normally: a restart that never happens must not leave the
   // bridge announcing a pause for ever.
-  this->pauseRequested.store(false);
   this->settleBeforeRestart();
+  this->pauseRequested.store(false);
   return false;
 }
 
-// Let whatever is on the wire finish. The bus task runs on its own, so without
-// this the restart can land in the middle of a telegram.
+// Wait for a gap between frames, so the restart lands between telegrams rather
+// than inside one. The bus task keeps running throughout, so a fixed sleep
+// would prove nothing; what is waited for is a stretch with nothing arriving.
 void HoermannGarageEngine::settleBeforeRestart()
 {
   const uint32_t started = esphome::millis();
   while ((esphome::millis() - started) < PAUSE_SETTLE_MS)
-    vTaskDelay(pdMS_TO_TICKS(20));
+  {
+    const uint32_t last = this->lastFrameOn.load();
+    if (last != 0 && (esphome::millis() - last) > PAUSE_QUIET_MS)
+      return;
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
 }
 
 void HoermannGarageEngine::publishIdentity()
@@ -813,9 +847,9 @@ void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, 
     {
       this->copyRegsToBytes(firstPayloadReg, SERIAL_FIRST_REGS, this->serialBuf);
       this->serialFirstHalfSeen = true;
-      // Half an answer is still progress, so do not let the retry count run
-      // out while the drive is in the middle of handing the payload over.
-      this->identityAttempts = 0;
+      // Half an answer is progress, so the wait starts again; the attempt count
+      // does not, or a drive that only ever sends the first half would have us
+      // asking again every thirty seconds for ever.
       this->identityAskedOn = esphome::millis();
       this->identityAsked = true;
       kept = true;
