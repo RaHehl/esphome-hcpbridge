@@ -215,6 +215,22 @@ private:
     uint8_t serialBuf[IDENT_SERIAL_LEN] = {0};
     bool serialFirstHalfSeen = false;
 
+    // Which shapes of request the drive actually sends, and the command byte
+    // that came with each. Reported once per new combination, so a bus that is
+    // polled several times a second stays readable.
+    struct SeenShape
+    {
+      uint8_t writeCount;
+      uint8_t readCount;
+      uint8_t command;
+      uint8_t sub;
+    };
+    static const uint8_t SEEN_SHAPES_MAX = 12;
+    SeenShape seenShapes[SEEN_SHAPES_MAX] = {};
+    uint8_t seenShapeCount = 0;
+    uint16_t lastReadCount = 0;
+    void reportShape(uint16_t writeCount);
+
     void copyRegsToBytes(uint8_t firstReg, uint8_t regCount, uint8_t *out);
     void onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count);
     void armIdentityRequest(uint8_t request);

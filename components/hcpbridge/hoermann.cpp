@@ -118,6 +118,8 @@ bool HoermannGarageEngine::regSetChecked(uint16_t addr, uint16_t val)
  */
 void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2)
 {
+  // Kept for the shape report, which only runs once the payload has landed.
+  this->lastReadCount = c1;
   if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x02 && a1 == REG_RESP_BASE && c1 == 0x08)
   {
     this->regResp[0] = 0x0000;
@@ -184,7 +186,7 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
   {
     // The original built "unknown function code fc=" + fc here, which was
     // pointer arithmetic on the literal and never showed the code.
-    ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
+    ESP_LOGW(TAG_HCI, "unhandled request fc=%x read %x+%u write %x+%u", fc, a1, c1, a2, c2);
   }
   this->state->setValid(true);
 }
@@ -574,9 +576,39 @@ static std::string identityToText(const uint8_t *data, size_t len)
   return out;
 }
 
+// The branches below pick a request apart by its shape, not by the command byte
+// the drive puts into the first register. This records how the two line up.
+void HoermannGarageEngine::reportShape(uint16_t writeCount)
+{
+  const uint8_t command = (uint8_t)(this->regCmd[0] & 0x00FF);
+  const uint8_t sub = writeCount >= 2 ? (uint8_t)(this->regCmd[1] >> 8) : 0;
+  const uint8_t wc = (uint8_t)(writeCount > 255 ? 255 : writeCount);
+  const uint8_t rc = (uint8_t)(this->lastReadCount > 255 ? 255 : this->lastReadCount);
+
+  for (uint8_t i = 0; i < this->seenShapeCount; i++)
+    if (this->seenShapes[i].writeCount == wc && this->seenShapes[i].readCount == rc &&
+        this->seenShapes[i].command == command && this->seenShapes[i].sub == sub)
+      return;
+
+  if (this->seenShapeCount < SEEN_SHAPES_MAX)
+  {
+    this->seenShapes[this->seenShapeCount++] = {wc, rc, command, sub};
+  }
+
+  char payload[3 * REG_CMD_COUNT + 1] = {0};
+  int at = 0;
+  for (uint16_t i = 0; i < writeCount && i < REG_CMD_COUNT; i++)
+    at += snprintf(payload + at, sizeof(payload) - at, "%04x ", this->regCmd[i]);
+  ESP_LOGI(TAG_HCI, "request shape: wrote %u, read %u, command %02x, sub %02x, data %s", wc, rc,
+           command, sub, payload);
+}
+
 void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
 {
-  if (addr != REG_CMD_BASE || count < 2)
+  if (addr != REG_CMD_BASE || count < 1)
+    return;
+  this->reportShape(count);
+  if (count < 2)
     return;
   // Low byte of the first register is what the drive wants from us, high byte
   // its running counter. Only the payload transfer is of interest here.
