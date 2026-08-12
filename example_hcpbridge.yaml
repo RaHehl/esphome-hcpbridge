@@ -120,6 +120,10 @@ sensor:
   - platform: hcpbridge
     id: sensor_position
     name: ${sen_pos}
+  - platform: hcpbridge
+    type: target_position
+    id: sensor_target_position
+    name: "${friendly_name} Target position"
 
 api:
   encryption:
@@ -152,6 +156,10 @@ wifi:
 # Enable logging
 logger:
   level: WARN
+  # The console is off on purpose: this component logs from its own task, and
+  # at a low baud rate that output sits in front of an answer the drive is
+  # waiting for. The network log is unaffected.
+  baud_rate: 0
 
 # Example configuration entry
 ota:

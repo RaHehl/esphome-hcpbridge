@@ -15,6 +15,11 @@ namespace hcpbridge {
 // anything else in the build that happens to use the same word.
 static constexpr uint8_t SLAVE_ID = 2;
 static constexpr uint32_t HCP_BAUD = 57600;
+// Above the application, below the radio stack: the answer to a frame is short
+// and time-critical, but starving Wi-Fi to deliver it would trade one problem
+// for another. The task blocks on the driver's queue, so it only runs when a
+// frame has actually arrived.
+static constexpr unsigned HCP_TASK_PRIO = 19;
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3
 static constexpr int8_t PIN_TXD = 17;
@@ -147,10 +152,13 @@ static constexpr uint32_t IDENT_MAX_ATTEMPTS = 3;
 // Pausing: the drive is told on the next poll that we are about to go quiet,
 // and confirms with its own sub code naming the address it is pausing.
 static constexpr uint16_t IDENT_SUB_PAUSE_ACK = 0x19;
-static constexpr uint32_t PAUSE_ACK_WAIT_MS = 3000;
+// The drive polls several times a second, so this covers several polls. It is
+// still a block on the loop task, called from an ota on_begin, so it is kept as
+// short as the handshake allows rather than as long as it might ever need.
+static constexpr uint32_t PAUSE_ACK_WAIT_MS = 800;
 // Restarting mid frame leaves half a telegram on the wire, which is what makes
 // a drive call an accessory faulty.
-static constexpr uint32_t PAUSE_SETTLE_MS = 1000;
+static constexpr uint32_t PAUSE_SETTLE_MS = 200;
 // A stretch this long with nothing arriving means no telegram is in flight.
 static constexpr uint32_t PAUSE_QUIET_MS = 40;
 
@@ -182,7 +190,7 @@ public:
     static HoermannGarageEngine& getInstance();
 
     /** False when the port or the bus task could not be brought up. */
-    bool setup(int8_t rx, int8_t tx, int8_t rts);
+    bool setup(int8_t rx, int8_t tx, int8_t rts, uint8_t uartNum);
     void handleModbus();
 
     // Answers one complete frame; returns the response length, or 0 to stay

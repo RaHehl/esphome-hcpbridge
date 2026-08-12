@@ -5,12 +5,12 @@ namespace hcpbridge {
 
 static const char *TAG = "hcpbridge";
 void HCPBridge::setup() {
-  int8_t rx = this->rx_pin_ == nullptr ? PIN_RXD : this->rx_pin_->get_pin();
-  int8_t tx = this->tx_pin_ == nullptr ? PIN_TXD : this->tx_pin_->get_pin();
-  int8_t rts = this->rts_pin_ == nullptr ? -1 : this->rts_pin_->get_pin();
+  const int8_t rx = this->rx_pin_ < 0 ? PIN_RXD : this->rx_pin_;
+  const int8_t tx = this->tx_pin_ < 0 ? PIN_TXD : this->tx_pin_;
+  const int8_t rts = this->rts_pin_;
 
   this->engine = &HoermannGarageEngine::getInstance();
-  if (!this->engine->setup(rx, tx, rts)) {
+  if (!this->engine->setup(rx, tx, rts, this->uart_num_)) {
     // Without this the bridge looks healthy, offers a cover, and swallows every
     // command sent to it.
     this->mark_failed();
@@ -47,5 +47,12 @@ void HCPBridge::announce_pause() {
 }
 
 void HCPBridge::on_shutdown() { this->announce_pause(); }
+void HCPBridge::dump_config() {
+  ESP_LOGCONFIG(TAG, "HCPBridge:");
+  ESP_LOGCONFIG(TAG, "  UART%u  rx=%d tx=%d rts=%d", this->uart_num_,
+                this->rx_pin_ < 0 ? PIN_RXD : this->rx_pin_,
+                this->tx_pin_ < 0 ? PIN_TXD : this->tx_pin_, this->rts_pin_);
+}
+
 }  // namespace hcpbridge
 }  // namespace esphome

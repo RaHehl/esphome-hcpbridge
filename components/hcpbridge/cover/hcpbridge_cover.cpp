@@ -69,6 +69,10 @@ void HCPBridgeCover::on_event_triggered() {
                "HCPBridgeCover::on_event_triggered() - state is invalid, "
                "setting warning");
       this->status_set_warning();
+      // Otherwise Home Assistant shows "Opening" for ever on a bus that died
+      // mid-travel.
+      this->current_operation = cover::COVER_OPERATION_IDLE;
+      this->publish_state(false);
     }
     return;
   }

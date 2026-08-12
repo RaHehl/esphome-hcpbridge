@@ -12,9 +12,19 @@ This is a esphome-based adaption of the HCPBridge. thanks to [mapero](https://gi
 
 ### Example esphome configuration
 
-> The component talks to the drive through the ESP-IDF UART driver and needs
-> `framework: type: esp-idf`. It no longer pulls in an Arduino Modbus library,
-> which ESPHome disables in ESP32 builds since 2026.2 anyway.
+### Breaking change for existing configurations
+
+The component brings its own Modbus RTU responder and talks to the drive
+through the ESP-IDF UART driver, so an existing configuration needs three
+edits:
+
+- `framework: type: arduino` becomes `framework: type: esp-idf`
+- the `esphome: libraries:` entry for `emelianov/modbus-esp8266` goes away
+- any `platformio_options` that were only there for that library go with it
+
+Supported targets are the classic ESP32 and the ESP32-S3, the two variants
+that have a third UART. The configuration is rejected with a readable message
+elsewhere rather than failing inside the compiler.
 
 ```YAML
 substitutions:
@@ -29,7 +39,7 @@ external_components:
     refresh: 0s # Ensure you always get the latest version
 
 esp32:
-  board: #adafruit_feather_esp32s3 #set your board
+  board: adafruit_feather_esp32s3 # set your board
   cpu_frequency: 240MHZ
   framework:
     type: esp-idf
@@ -40,6 +50,7 @@ hcpbridge:
   tx_pin: 17 # optional, default 17
   #rts_pin: 1 # optional; drives an RS485 transceiver that has no automatic
   #           # direction control. Untested on hardware.
+  #uart_num: 2            # optional, default 2
   #update_interval: 500ms # optional; how often entities are refreshed
 
 cover:

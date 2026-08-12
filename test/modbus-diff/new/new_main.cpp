@@ -22,7 +22,7 @@ int exchange_new(HoermannGarageEngine &e, const uint8_t *adu, size_t n, uint8_t 
 }
 int main() {
   auto &e = HoermannGarageEngine::getInstance();
-  e.setup(18, 17, -1);
+  e.setup(18, 17, -1, 2);
   std::string line;
   uint8_t req[300], resp[300];
   while (std::getline(std::cin, line)) {

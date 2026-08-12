@@ -14,7 +14,8 @@
 namespace esphome {
 namespace hcpbridge {
 
-const char *const TAG_HCI = "HCI-BUS";
+// Under the component name, so `logger: logs: hcpbridge.bus:` can reach it.
+const char *const TAG_HCI = "hcpbridge.bus";
 
 // Only the second value of each pair is ever sent; see activeCommandValues.
 const HoermannCommand HoermannCommand::STARTOPENDOOR = HoermannCommand(0x0210, 0x0110, 0x0000, 0x0000); // Typo 0201
@@ -46,11 +47,11 @@ HoermannGarageEngine &HoermannGarageEngine::getInstance()
   return instance;
 }
 
-bool HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
+bool HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts, uint8_t uartNum)
 {
   this->mb.set_handler([this](const uint8_t *req, size_t len, uint8_t *resp) -> size_t
                        { return this->onFrame(req, len, resp); });
-  if (!this->mb.begin(UART_NUM_2, rx, tx, rts, HCP_BAUD, SLAVE_ID))
+  if (!this->mb.begin((uart_port_t) uartNum, rx, tx, rts, HCP_BAUD, SLAVE_ID))
   {
     // No port, no task: at top priority it would spin, because poll() returns
     // immediately.
@@ -58,15 +59,15 @@ bool HoermannGarageEngine::setup(int8_t rx, int8_t tx, int8_t rts)
     return false;
   }
 
-  xTaskCreatePinnedToCore(
+  const BaseType_t created = xTaskCreatePinnedToCore(
       modbusServeTask,          /* Function to implement the task */
       "ModBusTask",             /* Name of the task */
       8192,                     /* Stack in bytes; the protocol call chain needs the room */
       NULL,                     /* Task input parameter */
-      configMAX_PRIORITIES - 1, /* Priority */
+      HCP_TASK_PRIO,            /* Priority */
       &modBusTask,              /* Task handle */
       1);                       /* Core */
-  if (modBusTask == nullptr)
+  if (created != pdPASS || modBusTask == nullptr)
   {
     ESP_LOGE(TAG_HCI, "bus task could not be created");
     return false;
