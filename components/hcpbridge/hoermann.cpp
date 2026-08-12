@@ -191,10 +191,11 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
   else if (fc == 0x17 && a2 == REG_CMD_BASE && c2 > 0x03 && a1 == REG_RESP_BASE)
   {
     // The drive is handing us a payload rather than asking for anything. Clear
-    // the answer registers; onWriteBlockComplete fills in the acknowledgement
-    // once the payload has landed.
-    this->regResp[0] = 0x0000;
-    this->regResp[1] = 0x0000;
+    // the whole answer block, not just the header: this is still a read/write
+    // frame, so whatever is left standing is read straight back, and stale
+    // command bits would look like a key press.
+    for (uint8_t i = 0; i < REG_RESP_COUNT; i++)
+      this->regResp[i] = 0x0000;
   }
   else if (fc == 0x10 && a1 == REG_BCAST_BASE)
   {
@@ -614,11 +615,15 @@ void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
 
   if (subCode == IDENT_SUB_PAUSE_ACK)
   {
+    if (count < 3)
+      return;  // the address spans a register this frame did not carry
     // The drive names the address it is pausing. It sits astride two
     // registers: low byte of the sub code register, high byte of the next.
     const uint16_t named = (uint16_t)(((this->regCmd[1] & 0x00FF) << 8) | (this->regCmd[2] >> 8));
     if (named == SLAVE_ID)
       this->pauseConfirmed.store(true);
+    for (uint8_t i = 2; i < REG_RESP_COUNT; i++)
+      this->regResp[i] = 0x0000;
     this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
     this->regResp[1] = (uint16_t)(0x0400 | RESP_ACK);
     return;
@@ -629,6 +634,18 @@ void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
 
 bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
 {
+  const uint32_t last = this->lastFrameOn.load();
+  // Nobody to say it to: nothing ever arrived, or the bus has been quiet past
+  // the point where we call it gone. A restart must not pay for that.
+  if (last == 0 || (esphome::millis() - last) > BUS_SILENCE_MS)
+    return false;
+
+  // A press that is still waiting would otherwise be half sent: its start bits
+  // could go out on a poll once the pause is over, with the matching end bits
+  // never following, because the restart lands in between.
+  this->nextCommand.store(nullptr);
+  this->commandWrittenOn = 0;
+
   this->pauseConfirmed.store(false);
   this->pauseRequested.store(true);
   const uint32_t started = esphome::millis();
@@ -670,6 +687,7 @@ void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, 
   // The payload starts one register behind the sub code.
   const uint8_t firstPayloadReg = 2;
   const uint16_t payloadRegs = count > firstPayloadReg ? count - firstPayloadReg : 0;
+  bool kept = false;
 
   if (subCode == IDENT_SUB_FIRMWARE && payloadRegs >= IDENT_FIRMWARE_LEN / 2)
   {
@@ -679,6 +697,7 @@ void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, 
     this->identFirmwareReady.store(true);
     this->identityWanted = 0;
     ESP_LOGI(TAG_HCI, "drive firmware version %s", this->identFirmware);
+    kept = true;
   }
   else if (subCode == IDENT_SUB_SERIAL)
   {
@@ -696,24 +715,27 @@ void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, 
       this->identityAttempts = 0;
       this->identityAskedOn = esphome::millis();
       this->identityAsked = true;
+      kept = true;
     }
     else if (!firstHalf && this->serialFirstHalfSeen && payloadRegs >= SERIAL_SECOND_REGS)
     {
-      this->copyRegsToBytes(firstPayloadReg, SERIAL_SECOND_REGS, this->serialBuf + 2 * SERIAL_FIRST_REGS);
+      this->copyRegsToBytes(firstPayloadReg, SERIAL_SECOND_REGS,
+                            this->serialBuf + 2 * SERIAL_FIRST_REGS);
       this->serialFirstHalfSeen = false;
       identityToText(this->serialBuf, IDENT_SERIAL_LEN, this->identSerial, sizeof(this->identSerial));
       this->identSerialReady.store(true);
       ESP_LOGI(TAG_HCI, "drive serial number received");
       // Identity is only complete with the firmware version, so go straight on.
       this->armIdentityRequest(IDENT_REQ_FIRMWARE);
-      return;
+      kept = true;
     }
   }
-  else
-  {
+
+  // Confirm only what was kept. Acknowledging a chunk that was thrown away
+  // tells the drive it need not send it again, and the last chunk of a split
+  // answer needs confirming just as much as the first.
+  if (!kept)
     return;
-  }
-  // Acknowledge; the answer is read out of these registers after this returns.
   // Only the lower seven bits are the drive's running counter, the top bit
   // marks which half of a split payload this was and must not be echoed.
   this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
@@ -820,7 +842,9 @@ void HoermannState::setRelayOn(bool relayOn)
 }
 void HoermannState::clearChanged()
 {
-  this->changed = false;
+  // Exchange, not assign: a change raised by the bus task between the test and
+  // this line would otherwise be dropped.
+  this->changed.exchange(false);
 }
 static bool isMoving(HoermannState::State s)
 {
@@ -842,9 +866,8 @@ void HoermannState::setState(State state)
 }
 void HoermannState::setValid(bool isValid)
 {
-  if (this->valid == isValid)
+  if (this->valid.exchange(isValid) == isValid)
     return;
-  this->valid = isValid;
   // Without this the connection sensor would only ever learn of the first
   // frame, never of the silence afterwards.
   this->changed = true;

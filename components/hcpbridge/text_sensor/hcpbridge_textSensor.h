@@ -23,9 +23,9 @@ class HCPBridgeTextSensor : public text_sensor::TextSensor, public Component {
       void on_event_triggered();
 
   protected:
-      HCPBridge *parent_;
+      HCPBridge *parent_{nullptr};
       HCPBridgeTextSensorType type_{HCPBRIDGE_TEXT_STATE};
-      HoermannState::State previousState_;
+      HoermannState::State previousState_{HoermannState::CLOSED};
       std::string previousText_;
       bool published_{false};
 };

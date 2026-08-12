@@ -76,9 +76,9 @@ public:
     bool lightOn = false;
     bool relayOn = false;
     State state = CLOSED;
-    bool changed = false;
+    std::atomic<bool> changed{false};
     float gotoPosition = 0.0f;
-    bool valid = false;
+    std::atomic<bool> valid{false};
     // Empty until the drive has answered the matching request.
     std::string serialNumber;
     std::string firmwareVersion;
@@ -128,6 +128,9 @@ public:
 #define SERIAL_SECOND_REGS 6
 #define IDENT_SERIAL_LEN ((SERIAL_FIRST_REGS + SERIAL_SECOND_REGS) * 2)
 #define IDENT_FIRMWARE_LEN 12
+// A payload that outgrew the block would read past it instead of failing here.
+static_assert(2 + SERIAL_FIRST_REGS <= REG_CMD_COUNT, "serial payload exceeds the command block");
+static_assert(2 + IDENT_FIRMWARE_LEN / 2 <= REG_CMD_COUNT, "firmware payload exceeds the command block");
 #define IDENT_RETRY_MS 30000
 #define IDENT_MAX_ATTEMPTS 3
 // Pausing: the drive is told on the next poll that we are about to go quiet,
