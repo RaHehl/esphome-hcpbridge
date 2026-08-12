@@ -434,41 +434,41 @@ void HoermannGarageEngine::setCommandValuesToRead()
   uint16_t regPlug2Value = 0x0000;
   uint16_t regPlug3Value = 0x0000;
 
-  // A press always wins over a repeat of our own. The repeat keeps its own slot
-  // for exactly that reason: taking the caller's would mean dropping a button
-  // press because we happened to be busy asking again.
+  // A press always wins over a repeat of our own, and each keeps its own phase
+  // counter: one shared counter got the two halves of a key press out of step
+  // whenever the slots changed hands, which sent a release without its press.
   const HoermannCommand *cmd = this->nextCommand.load();
+  if (cmd != nullptr && this->repeatCommand != nullptr)
+  {
+    this->repeatCommand = nullptr;
+    this->repeatWrittenOn = 0;
+    this->awaitedCommand = nullptr;
+  }
   const bool isRepeat = cmd == nullptr && this->repeatCommand != nullptr;
   if (isRepeat)
     cmd = this->repeatCommand;
-  else if (cmd != nullptr && this->repeatCommand != nullptr)
-  {
-    this->repeatCommand = nullptr;
-    this->commandWrittenOn = 0;
-    this->awaitedCommand = nullptr;
-  }
+  uint32_t &writtenOn = isRepeat ? this->repeatWrittenOn : this->commandWrittenOn;
 
   if (cmd != nullptr)
   {
     // But not yet sent
-    if (commandWrittenOn == 0)
+    if (writtenOn == 0)
     {
       // Send it
       regPlug2Value = cmd->commandRegPlus2Value;
       regPlug3Value = cmd->commandRegPlus3Value;
       ESP_LOGI(TAG_HCI, "command start %x %x", regPlug2Value, regPlug3Value);
-      commandWrittenOn = esphome::millis();
+      writtenOn = esphome::millis();
       // It was written and it can be cleared
     }
     // Subtract instead of add: adding overflows when millis() wraps and the
     // command would stick forever.
-    else if (commandWrittenOn != 0 && (esphome::millis() - commandWrittenOn) > SIMULATEKEYPRESSDELAYMS)
+    else if ((esphome::millis() - writtenOn) > SIMULATEKEYPRESSDELAYMS)
     {
       regPlug2Value = cmd->commandEndPlus2Value;
       regPlug3Value = cmd->commandEndPlus3Value;
       ESP_LOGI(TAG_HCI, "command dispose %x %x", regPlug2Value, regPlug3Value);
-      // Reset Variables
-      commandWrittenOn = 0;
+      writtenOn = 0;
       if (isRepeat)
       {
         this->repeatCommand = nullptr;
@@ -542,7 +542,7 @@ void HoermannGarageEngine::checkCommandEffect()
     this->awaitedRepeats = 1;
     ESP_LOGI(TAG_HCI, "repeating command %x", this->awaitedCommand->commandRegPlus2Value);
     this->repeatCommand = this->awaitedCommand;
-    this->commandWrittenOn = 0;
+    this->repeatWrittenOn = 0;
   }
 }
 

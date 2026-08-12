@@ -256,6 +256,9 @@ private:
     // Separate from nextCommand so a button press is never dropped in favour of
     // a repeat of our own.
     const HoermannCommand *repeatCommand = nullptr;
+    // Its own phase counter: sharing one with the caller's command got the two
+    // halves of a key press out of step whenever the slots changed hands.
+    uint32_t repeatWrittenOn = 0;
     const HoermannCommand *awaitedCommand = nullptr;
     uint32_t awaitedSince = 0;
     uint8_t awaitedRepeats = 0;
