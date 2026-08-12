@@ -35,26 +35,31 @@ cover::CoverTraits HCPBridgeCover::get_traits() {
 }
 
 void HCPBridgeCover::control(const cover::CoverCall &call) {
+  bool ok = true;
   if (call.get_stop()) {
-    this->parent_->engine->stopDoor();
+    ok = this->parent_->engine->stopDoor() && ok;
   }
   if (call.get_position().has_value()) {
     if (call.get_position().value() == 1.0f) {
-      this->parent_->engine->openDoor();
+      ok = this->parent_->engine->openDoor() && ok;
     } else if (call.get_position().value() == 0.0f) {
-      this->parent_->engine->closeDoor();
+      ok = this->parent_->engine->closeDoor() && ok;
     } else {
-      this->parent_->engine->setPosition(call.get_position().value() * 100.0f);
+      ok = this->parent_->engine->setPosition(call.get_position().value() * 100.0f) && ok;
     }
   }
   if (call.get_toggle()) {
-    this->parent_->engine->impulseDoor();
+    ok = this->parent_->engine->impulseDoor() && ok;
+  }
+  if (!ok) {
+    ESP_LOGW(TAG, "command dropped, the drive has not fetched the previous one yet");
+    this->publish_state();  // keep Home Assistant on the real position
   }
 }
 
 void HCPBridgeCover::setup() {
   ESP_LOGD(TAG, "HCPBridgeCover::setup() - setup method calleds");
-  this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); }, TAG);
+  this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); });
 }
 
 void HCPBridgeCover::on_event_triggered() {
@@ -77,17 +82,17 @@ void HCPBridgeCover::on_event_triggered() {
   float currentPosition = state->currentPosition;
   HoermannState::State stateValue = state->state;
 
-  // Determine current operation based on state and position
   switch (stateValue) {
     case HoermannState::OPENING:
       this->current_operation = cover::COVER_OPERATION_OPENING;
       break;
     case HoermannState::MOVE_VENTING:
     case HoermannState::MOVE_HALF:
+      // 1.0 is fully open, so a falling position is the door coming down.
       if (this->previousPosition_ > currentPosition) {
-        this->current_operation = cover::COVER_OPERATION_OPENING;
-      } else {
         this->current_operation = cover::COVER_OPERATION_CLOSING;
+      } else {
+        this->current_operation = cover::COVER_OPERATION_OPENING;
       }
       break;
     case HoermannState::CLOSING:

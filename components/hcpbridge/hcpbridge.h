@@ -13,13 +13,18 @@ namespace hcpbridge {
 class HCPBridge : public PollingComponent {
  public:
   void setup() override;
+  // The drive polls from the moment it has power and counts the polls we do
+  // not answer, so the port has to come up before everything else.
+  float get_setup_priority() const override { return setup_priority::BUS; }
   void update() override;
+  void on_shutdown() override;
+  /** Tell the drive we are about to go quiet. Call from an update on_begin. */
+  void announce_pause();
   void set_tx_pin(InternalGPIOPin *tx_pin) { this->tx_pin_ = tx_pin; }
   void set_rx_pin(InternalGPIOPin *rx_pin) { this->rx_pin_ = rx_pin; }
   void set_rts_pin(InternalGPIOPin *rts_pin) { this->rts_pin_ = rts_pin; }
-  HoermannGarageEngine *engine;
-  void add_on_state_callback(std::function<void()> &&callback, const char *tag);
-  void add_prio_callback(std::function<void()> &&callback, const char *tag);
+  HoermannGarageEngine *engine{nullptr};
+  void add_on_state_callback(std::function<void()> &&callback);
 
  protected:
   InternalGPIOPin *tx_pin_;
