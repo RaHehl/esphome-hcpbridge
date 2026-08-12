@@ -655,6 +655,7 @@ bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
     if (this->pauseConfirmed.load())
     {
       this->pauseRequested.store(false);
+      this->settleBeforeRestart();
       return true;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -662,7 +663,17 @@ bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
   // Back to answering normally: a restart that never happens must not leave the
   // bridge announcing a pause for ever.
   this->pauseRequested.store(false);
+  this->settleBeforeRestart();
   return false;
+}
+
+// Let whatever is on the wire finish. The bus task runs on its own, so without
+// this the restart can land in the middle of a telegram.
+void HoermannGarageEngine::settleBeforeRestart()
+{
+  const uint32_t started = esphome::millis();
+  while ((esphome::millis() - started) < PAUSE_SETTLE_MS)
+    vTaskDelay(pdMS_TO_TICKS(20));
 }
 
 void HoermannGarageEngine::publishIdentity()

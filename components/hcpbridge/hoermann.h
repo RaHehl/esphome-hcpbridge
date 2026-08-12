@@ -137,6 +137,10 @@ static_assert(2 + IDENT_FIRMWARE_LEN / 2 <= REG_CMD_COUNT, "firmware payload exc
 // and confirms with its own sub code naming the address it is pausing.
 #define IDENT_SUB_PAUSE_ACK 0x19
 #define PAUSE_ACK_WAIT_MS 3000
+// After the pause is confirmed the bus task can still be in the middle of a
+// frame. Restarting into that leaves half a telegram on the wire, which is
+// exactly what makes a drive treat an accessory as faulty.
+#define PAUSE_SETTLE_MS 2000
 
 // The drive polls several times a second. Nothing at all for this long means the
 // link is gone, not that the drive has nothing to say.
@@ -187,6 +191,9 @@ public:
      * on anyway; a restart must not hang on a bus that is already gone.
      */
     bool announcePause(uint32_t timeoutMs);
+
+    /** Waits out any frame still on the wire before the caller restarts. */
+    void settleBeforeRestart();
 
     /** Drops the connected state once the drive has gone quiet for too long. */
     void checkBusSilence();
