@@ -626,8 +626,28 @@ void HoermannGarageEngine::onRegSevenChanged(uint16_t oldVal, uint16_t val)
 /**
  * Write on 0x9C41 , byte1: counter, byte2: command
  */
+// Measurement only. Collects a run of counter bytes and prints it once, a few
+// times over, so the step between consecutive frames can be read off instead of
+// guessed at. Prints nothing else and changes nothing that goes out.
+void HoermannGarageEngine::probeCounter(uint8_t counterByte)
+{
+  if (this->counterProbeRuns >= 4)
+    return;
+  this->counterProbe[this->counterProbeAt++] = counterByte;
+  if (this->counterProbeAt < COUNTER_PROBE_LEN)
+    return;
+  char line[COUNTER_PROBE_LEN * 3 + 1] = {0};
+  size_t at = 0;
+  for (uint8_t i = 0; i < COUNTER_PROBE_LEN && at + 1 < sizeof(line); i++)
+    at += snprintf(line + at, sizeof(line) - at, "%02x ", this->counterProbe[i]);
+  ESP_LOGI(TAG_HCI, "counter run: %s", line);
+  this->counterProbeAt = 0;
+  this->counterProbeRuns++;
+}
+
 void HoermannGarageEngine::onCounterWrite(uint16_t val)
 {
+  this->probeCounter((uint8_t)(val >> 8));
   uint16_t counter = val & 0xFF00;
   uint16_t command = (val & 0x00FF) << 8;
   this->regResp[0] |= counter;
