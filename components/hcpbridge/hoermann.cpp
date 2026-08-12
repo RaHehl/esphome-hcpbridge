@@ -537,6 +537,10 @@ void HoermannGarageEngine::onRegSevenChanged(uint16_t oldVal, uint16_t val)
 
 {
   if ((oldVal & 0xFF00) != (val & 0xFF00)){
+    // Bits 4 and 5 of the high byte are the drive's own fault indication. They
+    // are reported whether or not the relay bit below means anything on this
+    // installation.
+    this->state->setActuatorError((val & 0x3000) != 0);
     // 0x02 happen when relay menu 30 is set to 06, 07, 10 
     this->state->setRelayOn((val & 0xFF00) >> 8 == 0x02);
   }
@@ -875,6 +879,14 @@ void HoermannState::setState(State state)
   if (was_moving && !isMoving(state))
     this->gotoPosition = 0.0f;
 }
+void HoermannState::setActuatorError(bool actuatorError)
+{
+  if (this->actuatorError == actuatorError)
+    return;
+  this->actuatorError = actuatorError;
+  this->changed = true;
+}
+
 void HoermannState::setValid(bool isValid)
 {
   if (this->valid.exchange(isValid) == isValid)
