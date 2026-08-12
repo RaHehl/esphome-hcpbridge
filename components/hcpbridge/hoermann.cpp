@@ -435,18 +435,12 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
   return except(EX_ILLEGAL_FUNCTION);
 }
 
-// A command occupies one answer and one only. The two values a command carries
-// are the same press in two shapes; the one the drive is given is the one that
-// marks a command as present, which is 0x01 in the high byte. For every
-// direction that is the second value, for the light it is the first.
+// A command occupies one answer and one only. The pair a command carries was
+// once sent as two frames in a row; the drive acts on the second of them, so
+// that is the one it is given. Measured at a door: the five direction commands
+// work sent this way alone, and the light does not work sent the other way.
 static void activeCommandValues(const HoermannCommand *cmd, uint16_t *v2, uint16_t *v3)
 {
-  if ((cmd->commandRegPlus2Value >> 8) == 0x01)
-  {
-    *v2 = cmd->commandRegPlus2Value;
-    *v3 = cmd->commandRegPlus3Value;
-    return;
-  }
   *v2 = cmd->commandEndPlus2Value;
   *v3 = cmd->commandEndPlus3Value;
 }
