@@ -665,6 +665,10 @@ void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, 
     {
       this->copyRegsToBytes(firstPayloadReg, 7, this->serialBuf);
       this->serialFirstHalfSeen = true;
+      // Half an answer is still progress, so do not let the retry count run
+      // out while the drive is in the middle of handing the payload over.
+      this->identityAttempts = 0;
+      this->identityAskedOn = esphome::millis();
     }
     else if (this->serialFirstHalfSeen)
     {
@@ -682,7 +686,9 @@ void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, 
     return;
   }
   // Acknowledge; the answer is read out of these registers after this returns.
-  this->regResp[0] = (uint16_t)(counterByte << 8);
+  // Only the lower seven bits are the drive's running counter, the top bit
+  // marks which half of a split payload this was and must not be echoed.
+  this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
   this->regResp[1] = (uint16_t)(0x0400 | RESP_ACK);
 }
 
