@@ -72,10 +72,14 @@ light:
 ```
 ### Binary_Sensor
 
-The component provides you two sensor.
+The component provides you three sensor.
 
 - `is_connected`: Who indicated if there is a valid connection with the door.
+  It goes off again after twenty seconds without a frame from the drive, so a
+  bus that has gone quiet no longer looks like a working one.
 - `relay_state`: Give the status of the option relay (Menu 30) of the HCP.
+- `actuator_error`: The drive's own fault indication, taken from the state it
+  broadcasts anyway. Nothing extra is sent to read it.
 ```YAML
 binary_sensor:
   - platform: hcpbridge
@@ -87,6 +91,9 @@ binary_sensor:
       id: sensor_relay
       #on_state:
       #create your automation based on Garage Door Relay state
+    actuator_error:
+      name: "Garage Door Fault"
+      id: sensor_actuator_error
 ```
 ### Text_sensor
 
@@ -96,6 +103,28 @@ text_sensor:
   - platform: hcpbridge
     id: sensor_templ_state
     name: "Garage Door State"
+```
+
+With `type` the same platform reports what the drive says about itself instead
+of what the door is doing. Both values are asked for once after the drive has
+started talking to us, so they cost one exchange per boot and nothing after
+that. They stay empty until the drive has answered. Without `type` the sensor
+reports the door state as before.
+
+- `serial_number`: the drive's serial number.
+- `firmware_version`: the drive's firmware version.
+```YAML
+text_sensor:
+  - platform: hcpbridge
+    type: serial_number
+    id: sensor_drive_serial
+    name: "Garage Door Serial Number"
+    entity_category: diagnostic
+  - platform: hcpbridge
+    type: firmware_version
+    id: sensor_drive_firmware
+    name: "Garage Door Firmware Version"
+    entity_category: diagnostic
 ```
 ### sensor
 
