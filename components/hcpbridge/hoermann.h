@@ -253,6 +253,9 @@ private:
 
     // What was sent and what the door looked like at the time, so the effect
     // can be recognised and the command repeated if there was none.
+    // Separate from nextCommand so a button press is never dropped in favour of
+    // a repeat of our own.
+    const HoermannCommand *repeatCommand = nullptr;
     const HoermannCommand *awaitedCommand = nullptr;
     uint32_t awaitedSince = 0;
     uint8_t awaitedRepeats = 0;
@@ -260,6 +263,7 @@ private:
     bool lightWhenSent = false;
 
     bool commandTookEffect() const;
+    // Bus task only: reads and arms the command slot.
     void checkCommandEffect();
 
     // Identity exchange. The drive only ever answers a request that rode along

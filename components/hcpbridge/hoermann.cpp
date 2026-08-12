@@ -426,11 +426,28 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
 
 void HoermannGarageEngine::setCommandValuesToRead()
 {
+  // Runs here, not from the component's poll: everything it touches is written
+  // by this task, and it can arm a repeat, which must not be decided from a
+  // half read state.
+  this->checkCommandEffect();
+
   uint16_t regPlug2Value = 0x0000;
   uint16_t regPlug3Value = 0x0000;
 
-  // Command was set
+  // A press always wins over a repeat of our own. The repeat keeps its own slot
+  // for exactly that reason: taking the caller's would mean dropping a button
+  // press because we happened to be busy asking again.
   const HoermannCommand *cmd = this->nextCommand.load();
+  const bool isRepeat = cmd == nullptr && this->repeatCommand != nullptr;
+  if (isRepeat)
+    cmd = this->repeatCommand;
+  else if (cmd != nullptr && this->repeatCommand != nullptr)
+  {
+    this->repeatCommand = nullptr;
+    this->commandWrittenOn = 0;
+    this->awaitedCommand = nullptr;
+  }
+
   if (cmd != nullptr)
   {
     // But not yet sent
@@ -452,10 +469,14 @@ void HoermannGarageEngine::setCommandValuesToRead()
       ESP_LOGI(TAG_HCI, "command dispose %x %x", regPlug2Value, regPlug3Value);
       // Reset Variables
       commandWrittenOn = 0;
-      this->nextCommand.store(nullptr);
-      // Start watching for the effect, unless this was itself a repeat.
-      if (this->awaitedCommand != cmd)
+      if (isRepeat)
       {
+        this->repeatCommand = nullptr;
+      }
+      else
+      {
+        this->nextCommand.store(nullptr);
+        // Start watching for the effect of what the caller asked for.
         this->awaitedCommand = cmd;
         this->awaitedSince = esphome::millis();
         this->awaitedRepeats = 0;
@@ -497,13 +518,16 @@ void HoermannGarageEngine::checkCommandEffect()
     this->awaitedCommand = nullptr;
     return;
   }
-  // A command the caller queued in the meantime takes over; repeating an old
-  // one on top of it would be a second press nobody asked for.
+  // A press the caller queued in the meantime takes over; repeating an old one
+  // on top of it would be a second press nobody asked for.
   if (this->nextCommand.load() != nullptr)
   {
     this->awaitedCommand = nullptr;
+    this->repeatCommand = nullptr;
     return;
   }
+  if (this->repeatCommand != nullptr)
+    return;  // the repeat is still going out
   // Subtract, never add: adding overflows when millis() wraps.
   const uint32_t waited = esphome::millis() - this->awaitedSince;
   if (waited > CMD_GIVEUP_MS)
@@ -517,7 +541,8 @@ void HoermannGarageEngine::checkCommandEffect()
   {
     this->awaitedRepeats = 1;
     ESP_LOGI(TAG_HCI, "repeating command %x", this->awaitedCommand->commandRegPlus2Value);
-    this->nextCommand.store(this->awaitedCommand);
+    this->repeatCommand = this->awaitedCommand;
+    this->commandWrittenOn = 0;
   }
 }
 
