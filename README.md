@@ -12,6 +12,10 @@ This is a esphome-based adaption of the HCPBridge. thanks to [mapero](https://gi
 
 ### Example esphome configuration
 
+> The component talks to the drive through the ESP-IDF UART driver and needs
+> `framework: type: esp-idf`. It no longer pulls in an Arduino Modbus library,
+> which ESPHome disables in ESP32 builds since 2026.2 anyway.
+
 ```YAML
 substitutions:
   name: "hcpbridge"
@@ -19,10 +23,6 @@ substitutions:
 esphome:
   name: "${name}"
   friendly_name: "${friendly_name}"
-  libraries:
-    - emelianov/modbus-esp8266 # Required for communication with the modbus
-  platformio_options:
-    board_build.f_cpu: 240000000L
 
 external_components:
     source: github://14yannick/esphome-hcpbridge
@@ -30,14 +30,17 @@ external_components:
 
 esp32:
   board: #adafruit_feather_esp32s3 #set your board
+  cpu_frequency: 240MHZ
   framework:
-    type: arduino
+    type: esp-idf
 
 hcpbridge:
   id: hcpbridge_id
-  rx_pin: 18 # optional, default=18
-  tx_pin: 17 # optional, default=17
-  #rts_pin : 1 # optional RTS pin to use if hardware automatic control flow is not available.
+  rx_pin: 18 # optional; default 18 on ESP32-S3, 16 on plain ESP32
+  tx_pin: 17 # optional, default 17
+  #rts_pin: 1 # optional; drives an RS485 transceiver that has no automatic
+  #           # direction control. Untested on hardware.
+  #update_interval: 500ms # optional; how often entities are refreshed
 
 cover:
   - platform: hcpbridge
@@ -69,12 +72,48 @@ light:
     output: output_light
     name: Garage Door Light
 ```
+### Telling the drive about a restart
+
+The bridge is a bus accessory, and a drive notices one that stops answering. On
+an ordinary restart it says so itself and waits for the drive to confirm before
+going away.
+
+An update is different: writing the new image stops the serial driver from
+running, so the bus is unanswered for the whole transfer, long before any
+shutdown handler runs. To be told in time the drive has to hear it when the
+transfer starts, which is a trigger on the `ota:` platform:
+
+```YAML
+ota:
+  - platform: esphome
+    on_begin:
+      then:
+        - lambda: 'id(hcpbridge_id).announce_pause();'
+```
+
+`id(...)` is the id of the `hcpbridge:` block. Without this the update still
+works; the drive simply sees the accessory vanish and may drop it from its list,
+which then needs a bus scan at the drive to undo.
+
+While at it: `logger:` writes to the serial console by default, and this
+component logs from its own task. On a busy or noisy bus that can hold up an
+answer to the drive. `baud_rate: 0` turns the console off and keeps the network
+log, which is what you want on a device that is not on a desk.
+
 ### Binary_Sensor
 
-The component provides you two sensor.
+The component provides you three sensor.
 
 - `is_connected`: Who indicated if there is a valid connection with the door.
+  It goes off again after twenty seconds without a frame from the drive, so a
+  bus that has gone quiet no longer looks like a working one.
 - `relay_state`: Give the status of the option relay (Menu 30) of the HCP.
+- `actuator_error`: The drive's own fault indication, taken from the state it
+  broadcasts anyway. Nothing extra is sent to read it. Worth having on: it was
+  seen standing at fault for an hour while the door still worked normally, and
+  the drive then dropped the accessory off the bus and showed a communication
+  error on its own display. It cleared when the drive was power cycled. One
+  observation, so treat it as an early warning to watch rather than a verdict.
 ```YAML
 binary_sensor:
   - platform: hcpbridge
@@ -86,6 +125,9 @@ binary_sensor:
       id: sensor_relay
       #on_state:
       #create your automation based on Garage Door Relay state
+    actuator_error:
+      name: "Garage Door Fault"
+      id: sensor_actuator_error
 ```
 ### Text_sensor
 
@@ -96,6 +138,28 @@ text_sensor:
     id: sensor_templ_state
     name: "Garage Door State"
 ```
+
+With `type` the same platform reports what the drive says about itself instead
+of what the door is doing. Both values are asked for once after the drive has
+started talking to us, so they cost one exchange per boot and nothing after
+that. They stay empty until the drive has answered. Without `type` the sensor
+reports the door state as before.
+
+- `serial_number`: the drive's serial number.
+- `firmware_version`: the drive's firmware version.
+```YAML
+text_sensor:
+  - platform: hcpbridge
+    type: serial_number
+    id: sensor_drive_serial
+    name: "Garage Door Serial Number"
+    entity_category: diagnostic
+  - platform: hcpbridge
+    type: firmware_version
+    id: sensor_drive_firmware
+    name: "Garage Door Firmware Version"
+    entity_category: diagnostic
+```
 ### sensor
 
 This component provide you the position of the door in %. Where 100% is fully open.
@@ -104,6 +168,18 @@ sensor:
   - platform: hcpbridge
     id: sensor_position
     name: ${sen_pos}
+```
+
+With `type: target_position` the same platform reports where the door is
+heading instead of where it is. The drive sends both in one register, so this
+needs no extra traffic. Without `type` the sensor reports the current position
+as before.
+```YAML
+sensor:
+  - platform: hcpbridge
+    type: target_position
+    id: sensor_target_position
+    name: "Garage Door Target Position"
 ```
 ### Button
 
@@ -189,7 +265,6 @@ Known working hardware are the ESP32 and S3 dual core chip.
 # ToDo
 
 - [x] Initial working version
-- [ ] Use esphome modbus component instead of own code
 - [x] Map additional functions to esphome
 - [x] Use callbacks instead of pollingComponent (Only hcpbridge is polling)
 - [x] Expert options for the HCPBridge component (GPIOs ...)

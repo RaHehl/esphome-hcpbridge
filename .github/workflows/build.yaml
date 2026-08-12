@@ -16,3 +16,12 @@ jobs:
         uses: esphome/build-action@v6
         with:
           yaml-file: .github/example_build_hcpbridge.yaml
+
+  differential:
+    name: Differential test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+      - name: Compare against the implementation this replaced
+        run: sh test/modbus-diff/run.sh

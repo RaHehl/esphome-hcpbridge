@@ -14,6 +14,9 @@ HCPBridge = hcpbridge_ns.class_("HCPBridge", cg.PollingComponent)
 
 CONF_HCPBridge_ID = "hcpbridge_id"
 
+# The sources use the ESP-IDF UART driver and FreeRTOS directly, so anything
+# else fails deep inside the compiler instead of here, where the cause is
+# visible.
 CONFIG_SCHEMA = cv.All(
     cv.Schema({
         cv.GenerateID(): cv.declare_id(HCPBridge),
@@ -21,6 +24,8 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_TX_PIN): pins.gpio_output_pin_schema,
         cv.Optional(CONF_RTS_PIN): pins.gpio_output_pin_schema,
     }).extend(cv.polling_component_schema("500ms")),
+    cv.only_on_esp32,
+    cv.only_with_esp_idf,
 )
 
 async def to_code(config):

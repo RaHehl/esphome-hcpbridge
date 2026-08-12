@@ -10,6 +10,7 @@ namespace hcpbridge {
 class HCPBridgeSensor : public sensor::Sensor, public Component {
  public:
   void set_hcpbridge_parent(HCPBridge *parent) { this->parent_ = parent; }
+  void set_target_mode(bool target_mode) { this->target_mode_ = target_mode; }
   void setup() override;
   void dump_config() override;
   void update_state(float value);
@@ -17,6 +18,7 @@ class HCPBridgeSensor : public sensor::Sensor, public Component {
 
  protected:
   HCPBridge *parent_;
+  bool target_mode_ = false;
   float previousPosition_ = 0.0f;
 };
 
