@@ -1043,6 +1043,17 @@ bool HoermannGarageEngine::setCommand(bool cond, const HoermannCommand *command)
 {
   if (cond)
   {
+    // Nobody is asking us for commands, so there is nothing to hand this to.
+    // Queueing it anyway does not delay it, it arms it: the slot has no expiry,
+    // so the first thing the drive fetches once it comes back is a key press
+    // from whenever the link broke. For a door that means it starts moving on
+    // its own, long after anyone asked. Refuse instead, and let the caller say
+    // so while the person who pressed is still there.
+    if (!this->state->valid)
+    {
+      ESP_LOGW(TAG_HCI, "no command sent, the drive is not talking to us");
+      return false;
+    }
     // Set from the main loop, read by the bus task on core 1. The pointer
     // store is atomic on ESP32, the test-and-set below is not.
     const HoermannCommand *expected = nullptr;
