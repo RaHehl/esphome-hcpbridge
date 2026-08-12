@@ -26,15 +26,15 @@ void HCPBridge::update() {
 }
 
 void HCPBridge::on_shutdown() {
-  // Say goodbye before the restart, so the drive lets go of us in an orderly
-  // way instead of finding an accessory that stopped answering mid frame.
+  // Announce the pause before restarting, so the drive is told we are going
+  // quiet instead of finding an accessory that stopped answering mid frame.
   if (this->engine == nullptr) {
     return;
   }
-  if (this->engine->leaveBus(LEAVE_WAIT_MS)) {
-    ESP_LOGI(TAG, "drive confirmed we are leaving the bus");
+  if (this->engine->announcePause(PAUSE_ACK_WAIT_MS)) {
+    ESP_LOGI(TAG, "drive confirmed the pause");
   } else {
-    ESP_LOGW(TAG, "drive did not confirm us leaving the bus");
+    ESP_LOGW(TAG, "drive did not confirm the pause");
   }
 }
 }  // namespace hcpbridge

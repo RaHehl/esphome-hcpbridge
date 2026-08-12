@@ -130,10 +130,10 @@ public:
 #define IDENT_FIRMWARE_LEN 12
 #define IDENT_RETRY_MS 30000
 #define IDENT_MAX_ATTEMPTS 3
-// Leaving the bus: the drive is told on the next poll and confirms it with its
-// own sub code, carrying the address it is saying goodbye to.
-#define IDENT_SUB_LEAVE 0x19
-#define LEAVE_WAIT_MS 3000
+// Pausing: the drive is told on the next poll that we are about to go quiet,
+// and confirms with its own sub code naming the address it is pausing.
+#define IDENT_SUB_PAUSE_ACK 0x19
+#define PAUSE_ACK_WAIT_MS 3000
 
 // The drive polls several times a second. Nothing at all for this long means the
 // link is gone, not that the drive has nothing to say.
@@ -142,7 +142,7 @@ public:
 // Answer codes we put in the low byte of the second answer register.
 #define RESP_STATUS 0x01
 #define RESP_REQUEST 0x22
-#define RESP_LEAVE 0x29
+#define RESP_PAUSE 0x29
 #define RESP_ACK 0xFD
 
 class HoermannGarageEngine
@@ -178,12 +178,12 @@ public:
     /** Ask the drive for its serial number, then its firmware version. */
     void requestDriveIdentity();
 
-    /**
-     * Tell the drive we are going away and wait for it to confirm. Returns
-     * false if it stayed quiet, in which case the caller should carry on
-     * anyway; a restart must not hang on a bus that is already gone.
+     /**
+     * Tell the drive we are about to go quiet and wait for it to confirm.
+     * Returns false if it stayed silent, in which case the caller should carry
+     * on anyway; a restart must not hang on a bus that is already gone.
      */
-    bool leaveBus(uint32_t timeoutMs);
+    bool announcePause(uint32_t timeoutMs);
 
     /** Drops the connected state once the drive has gone quiet for too long. */
     void checkBusSilence();
@@ -255,8 +255,8 @@ private:
     bool serialFirstHalfSeen = false;
 
     // Set from the main task, read and answered by the bus task.
-    std::atomic<bool> leaveRequested{false};
-    std::atomic<bool> leaveConfirmed{false};
+    std::atomic<bool> pauseRequested{false};
+    std::atomic<bool> pauseConfirmed{false};
     // Written by the bus task on every frame, read by the main task.
     std::atomic<uint32_t> lastFrameOn{0};
 

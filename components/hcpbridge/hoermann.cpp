@@ -129,9 +129,9 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
 
     // Checked before the command slot is read, so a press that is still waiting
     // stays waiting instead of being consumed by a frame that does not carry it.
-    if (this->leaveRequested.load())
+    if (this->pauseRequested.load())
     {
-      this->regResp[1] = RESP_LEAVE;
+      this->regResp[1] = RESP_PAUSE;
       this->regResp[2] = SLAVE_ID;
       this->regResp[3] = 0x0000;
       this->state->setValid(true);
@@ -612,13 +612,13 @@ void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
   const uint8_t counterByte = (uint8_t)(this->regCmd[0] >> 8);
   const uint8_t subCode = (uint8_t)(this->regCmd[1] >> 8);
 
-  if (subCode == IDENT_SUB_LEAVE)
+  if (subCode == IDENT_SUB_PAUSE_ACK)
   {
-    // The drive names the address it is letting go of. It sits astride two
+    // The drive names the address it is pausing. It sits astride two
     // registers: low byte of the sub code register, high byte of the next.
     const uint16_t named = (uint16_t)(((this->regCmd[1] & 0x00FF) << 8) | (this->regCmd[2] >> 8));
     if (named == SLAVE_ID)
-      this->leaveConfirmed.store(true);
+      this->pauseConfirmed.store(true);
     this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
     this->regResp[1] = (uint16_t)(0x0400 | RESP_ACK);
     return;
@@ -627,24 +627,24 @@ void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
   this->onIdentityData(counterByte, subCode, count);
 }
 
-bool HoermannGarageEngine::leaveBus(uint32_t timeoutMs)
+bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
 {
-  this->leaveConfirmed.store(false);
-  this->leaveRequested.store(true);
+  this->pauseConfirmed.store(false);
+  this->pauseRequested.store(true);
   const uint32_t started = esphome::millis();
   // Subtract, never add: adding overflows when millis() wraps.
   while ((esphome::millis() - started) < timeoutMs)
   {
-    if (this->leaveConfirmed.load())
+    if (this->pauseConfirmed.load())
     {
-      this->leaveRequested.store(false);
+      this->pauseRequested.store(false);
       return true;
     }
     vTaskDelay(pdMS_TO_TICKS(10));
   }
   // Back to answering normally: a restart that never happens must not leave the
-  // bridge saying goodbye for ever.
-  this->leaveRequested.store(false);
+  // bridge announcing a pause for ever.
+  this->pauseRequested.store(false);
   return false;
 }
 
