@@ -127,6 +127,16 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
     this->regResp[6] = 0x0000;
     this->regResp[7] = 0x0000;
 
+    // Checked before the command slot is read, so a press that is still waiting
+    // stays waiting instead of being consumed by a frame that does not carry it.
+    if (this->pauseRequested.load())
+    {
+      this->regResp[1] = RESP_PAUSE;
+      this->regResp[2] = SLAVE_ID;
+      this->regResp[3] = 0x0000;
+      this->state->setValid(true);
+      return;
+    }
     setCommandValuesToRead();
 
     // The first answered poll means the drive is talking to us, so this is the
@@ -603,7 +613,67 @@ void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
   const uint8_t counterByte = (uint8_t)(this->regCmd[0] >> 8);
   const uint8_t subCode = (uint8_t)(this->regCmd[1] >> 8);
 
+  if (subCode == IDENT_SUB_PAUSE_ACK)
+  {
+    if (count < 3)
+      return;  // the address spans a register this frame did not carry
+    // The drive names the address it is pausing. It sits astride two
+    // registers: low byte of the sub code register, high byte of the next.
+    const uint16_t named = (uint16_t)(((this->regCmd[1] & 0x00FF) << 8) | (this->regCmd[2] >> 8));
+    if (named == SLAVE_ID)
+      this->pauseConfirmed.store(true);
+    for (uint8_t i = 2; i < REG_RESP_COUNT; i++)
+      this->regResp[i] = 0x0000;
+    this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
+    this->regResp[1] = (uint16_t)(0x0400 | RESP_ACK);
+    return;
+  }
+
   this->onIdentityData(counterByte, subCode, count);
+}
+
+bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
+{
+  const uint32_t last = this->lastFrameOn.load();
+  // Nobody to say it to: nothing ever arrived, or the bus has been quiet past
+  // the point where we call it gone. A restart must not pay for that.
+  if (last == 0 || (esphome::millis() - last) > BUS_SILENCE_MS)
+    return false;
+
+  // A press that is still waiting would otherwise be half sent: its start bits
+  // could go out on a poll once the pause is over, with the matching end bits
+  // never following, because the restart lands in between.
+  this->nextCommand.store(nullptr);
+  this->commandWrittenOn = 0;
+
+  this->pauseConfirmed.store(false);
+  this->pauseRequested.store(true);
+  const uint32_t started = esphome::millis();
+  // Subtract, never add: adding overflows when millis() wraps.
+  while ((esphome::millis() - started) < timeoutMs)
+  {
+    if (this->pauseConfirmed.load())
+    {
+      this->pauseRequested.store(false);
+      this->settleBeforeRestart();
+      return true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  // Back to answering normally: a restart that never happens must not leave the
+  // bridge announcing a pause for ever.
+  this->pauseRequested.store(false);
+  this->settleBeforeRestart();
+  return false;
+}
+
+// Let whatever is on the wire finish. The bus task runs on its own, so without
+// this the restart can land in the middle of a telegram.
+void HoermannGarageEngine::settleBeforeRestart()
+{
+  const uint32_t started = esphome::millis();
+  while ((esphome::millis() - started) < PAUSE_SETTLE_MS)
+    vTaskDelay(pdMS_TO_TICKS(20));
 }
 
 void HoermannGarageEngine::publishIdentity()
