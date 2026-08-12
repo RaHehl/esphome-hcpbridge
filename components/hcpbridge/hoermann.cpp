@@ -128,6 +128,16 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
     this->regResp[6] = 0x0000;
     this->regResp[7] = 0x0000;
 
+    // Going away takes precedence over anything we might still want to say.
+    if (this->leaveRequested.load())
+    {
+      this->regResp[1] = RESP_LEAVE;
+      this->regResp[2] = SLAVE_ID;
+      this->regResp[3] = 0x0000;
+      this->state->setValid(true);
+      return;
+    }
+
     // The first answered poll means the drive is talking to us, so this is the
     // point to find out who it is.
     if (!this->identityStarted)
@@ -208,6 +218,11 @@ static inline void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1]
  */
 size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *resp)
 {
+  // Anything addressed to us counts as a sign of life, whatever we make of it.
+  // millis() can be 0 for the first millisecond, which would read as "never".
+  const uint32_t now = esphome::millis();
+  this->lastFrameOn.store(now == 0 ? 1 : now);
+
   const uint8_t fc = req[1];
 
   // The replaced library computed fn + 0x80, not fn | 0x80, which overflows
@@ -593,7 +608,44 @@ void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
     return;
   const uint8_t counterByte = (uint8_t)(this->regCmd[0] >> 8);
   const uint8_t subCode = (uint8_t)(this->regCmd[1] >> 8);
+
+  if (subCode == IDENT_SUB_LEAVE)
+  {
+    // The drive names the address it is letting go of. It sits astride two
+    // registers: low byte of the sub code register, high byte of the next.
+    const uint16_t named = (uint16_t)(((this->regCmd[1] & 0x00FF) << 8) | (this->regCmd[2] >> 8));
+    if (named == SLAVE_ID)
+      this->leaveConfirmed.store(true);
+    this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
+    this->regResp[1] = (uint16_t)(0x0400 | RESP_ACK);
+    return;
+  }
+
   this->onIdentityData(counterByte, subCode, count);
+}
+
+bool HoermannGarageEngine::leaveBus(uint32_t timeoutMs)
+{
+  this->leaveConfirmed.store(false);
+  this->leaveRequested.store(true);
+  const uint32_t started = esphome::millis();
+  // Subtract, never add: adding overflows when millis() wraps.
+  while ((esphome::millis() - started) < timeoutMs)
+  {
+    if (this->leaveConfirmed.load())
+      return true;
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  return false;
+}
+
+void HoermannGarageEngine::checkBusSilence()
+{
+  const uint32_t last = this->lastFrameOn.load();
+  if (last == 0)
+    return;  // nothing ever arrived, the initial state already says so
+  if ((esphome::millis() - last) > BUS_SILENCE_MS)
+    this->state->setValid(false);
 }
 
 void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count)
@@ -767,7 +819,12 @@ void HoermannState::setState(State state)
 }
 void HoermannState::setValid(bool isValid)
 {
+  if (this->valid == isValid)
+    return;
   this->valid = isValid;
+  // Without this the connection sensor would only ever learn of the first
+  // frame, never of the silence afterwards.
+  this->changed = true;
 }
 
 void HoermannState::setSerialNumber(const std::string &serialNumber)
