@@ -234,6 +234,24 @@ public:
     void onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
     void reportUnknownShape(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
 
+    /**
+     * The counter byte is a delivery receipt. The drive holds its value until
+     * it has been answered, so a value that fails to advance says the previous
+     * answer never arrived. Running the count ourselves is what makes that
+     * visible; the byte we send is the same either way, because our count is
+     * the drive's own value carried forward.
+     */
+    void syncCounter(uint8_t counterByte);
+    void advanceCounter();
+    void rearmLostCommand();
+
+    uint8_t txCounter = 0;      // goes into the answer
+    uint8_t txCounterPrev = 0;  // the one to fall back on when an answer is lost
+    bool txCounterValid = false;
+    // What the last answer carried, so it can be put back if that answer was
+    // lost. Mirrors the snapshot the count is checked against.
+    const HoermannCommand *lastSentCommand = nullptr;
+
     // Last frame shape we had no branch for, so a repeat can be told from a new
     // one. Only ever touched from the bus task.
     bool unknownSeen = false;

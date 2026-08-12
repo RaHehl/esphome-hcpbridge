@@ -311,6 +311,14 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     const uint8_t byteCnt = req[10];
     const uint8_t *wdata = req + 11;
 
+    // Before the hook, because whether the previous answer arrived decides
+    // whether a command has to go back into the queue, and the hook is where
+    // the queue is read. The high byte of the first written register is the
+    // counter, the low byte the command.
+    const bool countedFrame = writeAddr == REG_CMD_BASE && writeCnt >= 1 && len >= 13;
+    if (countedFrame)
+      this->syncCounter(wdata[0]);
+
     this->onRequestHook(fc, readAddr, readCnt, writeAddr, writeCnt);
 
     // Exactly the library's check: it tested the read range twice and the
@@ -342,6 +350,14 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
       wr16(resp + n, this->regGet((uint16_t)(readAddr + i)));
       n += 2;
     }
+    // An answer is on its way out, so the count moves on. Only here: a frame
+    // that ended in an exception was never answered with one.
+    //
+    // What goes into the answer stays the drive's own byte, mirrored back. Our
+    // count is that byte carried forward and would put the same value there,
+    // so sending it instead would only add a way to get it wrong.
+    if (countedFrame)
+      this->advanceCounter();
     return n;
   }
 
@@ -511,10 +527,15 @@ void HoermannGarageEngine::setCommandValuesToRead()
   }
   else if (this->repeatCommand != nullptr)
   {
-    activeCommandValues(this->repeatCommand, &regPlug2Value, &regPlug3Value);
+    cmd = this->repeatCommand;
+    activeCommandValues(cmd, &regPlug2Value, &regPlug3Value);
     ESP_LOGI(TAG_HCI, "repeating command %x %x", regPlug2Value, regPlug3Value);
     this->repeatCommand = nullptr;
   }
+  // Remembered until the next answer, so a lost one can be reconstructed. An
+  // answer that carried nothing sets this back to nothing, or a loss would put
+  // back a command that had already been delivered once.
+  this->lastSentCommand = cmd;
   this->regResp[2] = regPlug2Value;
   this->regResp[3] = regPlug3Value;
 }
@@ -711,6 +732,64 @@ void HoermannGarageEngine::onCounterWrite(uint16_t val)
   uint16_t command = (val & 0x00FF) << 8;
   this->regResp[0] |= counter;
   this->regResp[1] |= command;
+}
+
+/**
+ * Called with the drive's counter byte before the answer is built, because the
+ * decision it makes has to happen before a command is taken out of the queue.
+ *
+ * The byte that ends up on the wire is not changed by any of this. In step the
+ * count equals what the drive just sent, and after a loss the fallback value is
+ * the one the drive is repeating, which is the same byte again. Its whole
+ * purpose is to notice the loss.
+ */
+void HoermannGarageEngine::syncCounter(uint8_t counterByte)
+{
+  // Top bit is the half selector of a split payload, not part of the count.
+  const uint8_t rx = counterByte & 0x7F;
+
+  if (counterByte == 0)
+  {
+    // Zero is the drive starting the count over, not a mismatch.
+    this->txCounter = 0;
+    this->txCounterValid = true;
+    return;
+  }
+  if (!this->txCounterValid)
+  {
+    // First frame we ever see: adopt whatever the drive is counting.
+    this->txCounter = rx;
+    this->txCounterValid = true;
+    return;
+  }
+  if (rx != this->txCounter)
+  {
+    // The drive has not moved on, so it never got the answer we sent. Go back
+    // to that value and put its command back with it.
+    this->txCounter = this->txCounterPrev;
+    this->rearmLostCommand();
+  }
+}
+
+void HoermannGarageEngine::advanceCounter()
+{
+  this->txCounterPrev = this->txCounter;
+  this->txCounter = this->txCounter == 0x7F ? 1 : (uint8_t)(this->txCounter + 1);
+}
+
+/**
+ * Put back what the lost answer was carrying. Only the repeat slot is used, so
+ * a press made in the meantime still wins: that one is newer and says what the
+ * user wants now.
+ */
+void HoermannGarageEngine::rearmLostCommand()
+{
+  if (this->lastSentCommand == nullptr)
+    return;  // the lost answer carried no command, nothing to put back
+  if (this->nextCommand.load() != nullptr)
+    return;
+  this->repeatCommand = this->lastSentCommand;
+  ESP_LOGI(TAG_HCI, "answer did not reach the drive, sending the command again");
 }
 
 void HoermannGarageEngine::requestDriveIdentity()
