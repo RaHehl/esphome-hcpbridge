@@ -424,36 +424,36 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
   return except(EX_ILLEGAL_FUNCTION);
 }
 
+// A command occupies one answer and one only. The two values a command carries
+// are the same press in two shapes; the one the drive is given is the one that
+// marks a command as present, which is 0x01 in the high byte. For every
+// direction that is the second value, for the light it is the first.
+static void activeCommandValues(const HoermannCommand *cmd, uint16_t *v2, uint16_t *v3)
+{
+  if ((cmd->commandRegPlus2Value >> 8) == 0x01)
+  {
+    *v2 = cmd->commandRegPlus2Value;
+    *v3 = cmd->commandRegPlus3Value;
+    return;
+  }
+  *v2 = cmd->commandEndPlus2Value;
+  *v3 = cmd->commandEndPlus3Value;
+}
+
 void HoermannGarageEngine::setCommandValuesToRead()
 {
   uint16_t regPlug2Value = 0x0000;
   uint16_t regPlug3Value = 0x0000;
 
-  // Command was set
+  // Written once, then gone: the answer is rebuilt from nothing on every poll,
+  // so a command that is not put back in is simply not there any more. No
+  // timer, and nothing to hold or release.
   const HoermannCommand *cmd = this->nextCommand.load();
   if (cmd != nullptr)
   {
-    // But not yet sent
-    if (commandWrittenOn == 0)
-    {
-      // Send it
-      regPlug2Value = cmd->commandRegPlus2Value;
-      regPlug3Value = cmd->commandRegPlus3Value;
-      ESP_LOGI(TAG_HCI, "command start %x %x", regPlug2Value, regPlug3Value);
-      commandWrittenOn = esphome::millis();
-      // It was written and it can be cleared
-    }
-    // Subtract instead of add: adding overflows when millis() wraps and the
-    // command would stick forever.
-    else if (commandWrittenOn != 0 && (esphome::millis() - commandWrittenOn) > SIMULATEKEYPRESSDELAYMS)
-    {
-      regPlug2Value = cmd->commandEndPlus2Value;
-      regPlug3Value = cmd->commandEndPlus3Value;
-      ESP_LOGI(TAG_HCI, "command dispose %x %x", regPlug2Value, regPlug3Value);
-      // Reset Variables
-      commandWrittenOn = 0;
-      this->nextCommand.store(nullptr);
-    }
+    activeCommandValues(cmd, &regPlug2Value, &regPlug3Value);
+    ESP_LOGI(TAG_HCI, "command %x %x", regPlug2Value, regPlug3Value);
+    this->nextCommand.store(nullptr);
   }
   this->regResp[2] = regPlug2Value;
   this->regResp[3] = regPlug3Value;
@@ -644,11 +644,9 @@ bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
   if (last == 0 || (esphome::millis() - last) > BUS_SILENCE_MS)
     return false;
 
-  // A press that is still waiting would otherwise be half sent: its start bits
-  // could go out on a poll once the pause is over, with the matching end bits
-  // never following, because the restart lands in between.
+  // A press that is still waiting is dropped rather than carried over a
+  // restart, where it would arrive with no one expecting it.
   this->nextCommand.store(nullptr);
-  this->commandWrittenOn = 0;
 
   this->pauseConfirmed.store(false);
   this->pauseRequested.store(true);

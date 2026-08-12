@@ -10,7 +10,6 @@
 
 #define SLAVE_ID 2
 #define HCP_BAUD 57600
-#define SIMULATEKEYPRESSDELAYMS 100
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3
 #define PIN_TXD 17
@@ -244,8 +243,6 @@ private:
     uint16_t regBcast[REG_BCAST_COUNT] = {0};     // 0x9D31, drive state
     uint16_t regResp[REG_RESP_COUNT] = {0};       // 0x9CB9, unsere Antwort
     std::atomic<const HoermannCommand *> nextCommand{nullptr};  // shared with the bus task
-    // uint32_t, not unsigned long: must wrap exactly like millis() does.
-    uint32_t commandWrittenOn = 0;
 
     // Identity exchange. The drive only ever answers a request that rode along
     // with a poll, and it takes the request out of the answer slot again, so a
