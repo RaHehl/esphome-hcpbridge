@@ -25,7 +25,6 @@ void HCPBridge::update() {
     return;
   }
   this->engine->publishIdentity();
-  this->engine->publishCounterProbe();
   this->engine->checkBusSilence();
   if (this->engine->state->changed) {
     this->engine->state->clearChanged();

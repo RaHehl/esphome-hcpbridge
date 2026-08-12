@@ -600,7 +600,7 @@ void HoermannGarageEngine::onRegSevenChanged(uint16_t oldVal, uint16_t val)
     // Bits 4 and 5 of the high byte are the drive's own fault indication. They
     // are reported whether or not the relay bit below means anything on this
     // installation.
-    this->state->setActuatorFlag((val & 0x3000) != 0);
+    this->state->setActuatorError((val & 0x3000) != 0);
     // 0x02 happen when relay menu 30 is set to 06, 07, 10 
     this->state->setRelayOn((val & 0xFF00) >> 8 == 0x02);
   }
@@ -616,36 +616,8 @@ void HoermannGarageEngine::onRegSevenChanged(uint16_t oldVal, uint16_t val)
 /**
  * Write on 0x9C41 , byte1: counter, byte2: command
  */
-// Measurement only. Records a run of counter bytes; the formatting and the log
-// line happen in the main task, because everything in here sits between the
-// drive's request and our answer.
-void HoermannGarageEngine::probeCounter(uint8_t counterByte)
-{
-  if (this->counterProbeRuns >= 4 || this->counterProbeReady.load())
-    return;
-  this->counterProbe[this->counterProbeAt++] = counterByte;
-  if (this->counterProbeAt < COUNTER_PROBE_LEN)
-    return;
-  this->counterProbeAt = 0;
-  this->counterProbeRuns++;
-  this->counterProbeReady.store(true);
-}
-
-void HoermannGarageEngine::publishCounterProbe()
-{
-  if (!this->counterProbeReady.load())
-    return;
-  char line[COUNTER_PROBE_LEN * 3 + 1] = {0};
-  size_t at = 0;
-  for (uint8_t i = 0; i < COUNTER_PROBE_LEN && at + 1 < sizeof(line); i++)
-    at += snprintf(line + at, sizeof(line) - at, "%02x ", this->counterProbe[i]);
-  ESP_LOGI(TAG_HCI, "counter run: %s", line);
-  this->counterProbeReady.store(false);
-}
-
 void HoermannGarageEngine::onCounterWrite(uint16_t val)
 {
-  this->probeCounter((uint8_t)(val >> 8));
   uint16_t counter = val & 0xFF00;
   uint16_t command = (val & 0x00FF) << 8;
   this->regResp[0] |= counter;
@@ -1066,11 +1038,11 @@ void HoermannState::setState(State state)
   if (was_moving && !isMoving(state))
     this->gotoPosition = 0.0f;
 }
-void HoermannState::setActuatorFlag(bool actuatorFlag)
+void HoermannState::setActuatorError(bool actuatorError)
 {
-  if (this->actuatorFlag == actuatorFlag)
+  if (this->actuatorError == actuatorError)
     return;
-  this->actuatorFlag = actuatorFlag;
+  this->actuatorError = actuatorError;
   this->changed = true;
 }
 

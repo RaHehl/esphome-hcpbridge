@@ -210,9 +210,6 @@ public:
     /** Waits out any frame still on the wire before the caller restarts. */
     void settleBeforeRestart();
 
-    /** Prints a finished counter run. Main task: formatting has no business
-     *  inside the window the drive waits for an answer in. */
-    void publishCounterProbe();
 
     /** Drops the connected state once the drive has gone quiet for too long. */
     void checkBusSilence();
@@ -303,12 +300,6 @@ private:
     // Measurement only, not part of the protocol. Records how the counter byte
     // in the drive's requests moves from one frame to the next, which is the
     // one fact still missing before a lost answer can be recognised from it.
-    static const uint8_t COUNTER_PROBE_LEN = 24;
-    uint8_t counterProbe[COUNTER_PROBE_LEN] = {0};
-    uint8_t counterProbeAt = 0;
-    uint8_t counterProbeRuns = 0;
-    std::atomic<bool> counterProbeReady{false};
-    void probeCounter(uint8_t counterByte);
 
     bool commandTookEffect() const;
     void checkCommandEffect();
