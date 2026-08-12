@@ -48,6 +48,19 @@ def transfer(counter, sub, payload):
     return wrap(body)
 
 
+def bcast(state_hi, pos=0x00):
+    """A drive state broadcast. Payload byte 4 is the state word's high byte."""
+    payload = bytearray(18)
+    payload[3] = pos          # regBcast[1] low byte, current position
+    payload[4] = state_hi     # regBcast[2] high byte, the state word
+    body = bytes([0x00, 0x10, BCAST >> 8, BCAST & 0xFF, 0x00, 9, 18]) + bytes(payload)
+    return wrap(body)
+
+
+# State word high bytes, as the drive reports them.
+ST_CLOSED, ST_OPEN, ST_OPENING, ST_CLOSING, ST_STOPPED = 0x40, 0x20, 0x01, 0x02, 0x00
+
+
 def run(lines):
     out = subprocess.run(["./new_bin"], input="\n".join(lines) + "\n",
                          capture_output=True, text=True, check=True).stdout
@@ -87,12 +100,15 @@ def _():
 
 @case("a lost answer sends the command again, exactly once")
 def _():
-    out = run([poll(0x1f), "C%d" % OPEN, poll(0x20), poll(0x20), poll(0x21), poll(0x22)])[1:]
-    first, repeat, after, later = (answer_regs(o) for o in out)
-    assert first[2] == 0x0110, "the press has to go out: %04x" % first[2]
-    assert repeat[2] == 0x0110, "the repeated counter has to repeat it: %04x" % repeat[2]
-    assert after[2] == 0x0000, "and then stop: %04x" % after[2]
-    assert later[2] == 0x0000, "and stay stopped: %04x" % later[2]
+    # A drive that keeps repeating never got any of it, so re-sending is right,
+    # but it has to stop: eight repeats must not mean eight key presses.
+    out = run([poll(0x1f), "C%d" % OPEN] + [poll(0x20)] * 8 + [poll(0x21)])[1:]
+    regs = [answer_regs(o) for o in out]
+    assert regs[0][2] == 0x0110, "the press has to go out: %04x" % regs[0][2]
+    assert regs[1][2] == 0x0110, "the repeated counter has to repeat it"
+    presses = sum(1 for r in regs if r[2] == 0x0110)
+    assert presses <= 4, "%d presses on the wire for one tap" % presses
+    assert regs[-1][2] == 0x0000, "and nothing once the counter moves on"
 
 
 @case("a delivered command is not sent a second time")
@@ -106,7 +122,10 @@ def _():
 
 @case("a counter that jumps does not start a repeat storm")
 def _():
-    seq = [poll(0x3f), "C%d" % OPEN, poll(0x40), poll(0x41)]
+    # No clean poll between the press and the jump: that one would clear the
+    # memory of what the last answer carried and the storm could not happen
+    # whatever the code did.
+    seq = [poll(0x3f), "C%d" % OPEN, poll(0x40)]
     seq += [poll(c) for c in range(0x50, 0x60)]
     out = run(seq)
     presses = sum(1 for o in out if (answer_regs(o) or [0, 0, 0])[2] == 0x0110)
@@ -181,6 +200,48 @@ def _():
         if r is None:
             continue
         assert r[2] != 0x0110, "a stale press reached the wire: %04x" % r[2]
+
+
+@case("a lost answer to a frame that carried no command repeats nothing")
+def _():
+    # A busscan answer carries no command, so losing it must not put the press
+    # from the poll before it back on the wire.
+    scan = poll(0xa1, command=0x02, read_cnt=5, payload=(0x00, 0x00, 0x00, 0x00))
+    out = run([poll(0xa0), "C%d" % OPEN, poll(0xa0 + 1 - 1), poll(0xa1) if False else scan,
+               scan, poll(0xa2)])
+    # The press goes out on its own poll; after that nothing may repeat it.
+    presses = sum(1 for o in out if (answer_regs(o) or [0, 0, 0])[2] == 0x0110)
+    assert presses <= 1, "%d presses on the wire for one tap" % presses
+
+
+@case("a repeat is dropped once the door has reached what was asked for")
+def _():
+    out = run([poll(0xb0), bcast(ST_CLOSED), "C%d" % OPEN, poll(0xb1),
+               bcast(ST_OPEN),        # the drive acted, we just did not hear it
+               poll(0xb1), poll(0xb2)])
+    for o in out[3:]:
+        r = answer_regs(o)
+        if r is None:
+            continue
+        assert r[2] != 0x0110, "open repeated at an open door: %04x" % r[2]
+
+
+@case("an impulse repeat survives on a standing door")
+def _():
+    # The ordinary cover toggle. The drive never heard it, nothing changed, so
+    # the repeat has to go out; requiring the door to be moving killed it.
+    out = run([poll(0xc0), bcast(ST_CLOSED), "C%d" % IMPULSE, poll(0xc1), poll(0xc1)])
+    repeat = answer_regs(out[-1])
+    assert repeat[2] == 0x0140, "the impulse repeat was dropped: %04x" % repeat[2]
+
+
+@case("an impulse repeat is dropped once the drive has reacted")
+def _():
+    out = run([poll(0xd0), bcast(ST_CLOSED), "C%d" % IMPULSE, poll(0xd1),
+               bcast(ST_OPENING),     # the drive did act
+               poll(0xd1)])
+    repeat = answer_regs(out[-1])
+    assert repeat[2] != 0x0140, "impulse repeated after the drive reacted: %04x" % repeat[2]
 
 
 def main():

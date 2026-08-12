@@ -110,6 +110,8 @@ static constexpr uint32_t CMD_GIVEUP_MS = 5000;
 // A press the drive never fetched is not delayed, it is stale: nobody is
 // standing there any more.
 static constexpr uint32_t CMD_STALE_MS = 2000;
+// How often one press may be re-sent after a lost answer.
+static constexpr uint8_t MAX_LOST_REPEATS = 3;
 
 // Hoermann bus register blocks: the drive writes commands to 0x9C41 and its
 // state to 0x9D31, and reads our answer from 0x9CB9.
@@ -279,6 +281,7 @@ private:
     uint8_t awaitedRepeats = 0;
     // The drive's own state word, not our translation of it: a code we do not
     // translate must still count as the drive having reacted.
+    uint8_t repeatsSent = 0;         // re-sends of the current command after a loss
     uint32_t stateWrites = 0;        // every change of the drive's state word
     uint32_t stateWritesWhenSent = 0;
 

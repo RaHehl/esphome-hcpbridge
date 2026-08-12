@@ -445,6 +445,7 @@ void HoermannGarageEngine::setCommandValuesToRead()
     this->awaitedSince = esphome::millis();
     this->awaitedRepeats = 0;
     this->stateWritesWhenSent = this->stateWrites;
+    this->repeatsSent = 0;
   }
   else if (this->repeatCommand != nullptr && this->repeatStillMakesSense())
   {
@@ -512,10 +513,12 @@ bool HoermannGarageEngine::repeatStillMakesSense() const
   const HoermannCommand *const cmd = this->repeatCommand;
   if (cmd == nullptr)
     return false;
-  const HoermannState::State now = this->state->state;
   if (cmd == &HoermannCommand::STARTIMPULSE)
-    return now == HoermannState::OPENING || now == HoermannState::CLOSING ||
-           now == HoermannState::MOVE_HALF || now == HoermannState::MOVE_VENTING;
+    // An impulse has no destination to check against, so the question is
+    // whether the drive did anything at all. It usually starts a standing door,
+    // which is why "is it moving" was the wrong test: it threw away the repeat
+    // for the ordinary toggle and told the caller the press had gone out.
+    return this->stateWrites == this->stateWritesWhenSent;
   // Anything else names a destination, so it is still worth sending exactly
   // while the door is not already there.
   return !this->commandReached(cmd);
@@ -523,8 +526,7 @@ bool HoermannGarageEngine::repeatStillMakesSense() const
 
 void HoermannGarageEngine::checkCommandEffect()
 {
-  // Once. The main task clears it on pause, so a reload could null it after
-  // the check above.
+  // Once, so the checks below all see the same command.
   const HoermannCommand *const awaited = this->awaitedCommand;
   if (awaited == nullptr)
     return;
@@ -739,12 +741,25 @@ void HoermannGarageEngine::rearmLostCommand()
     return;  // the lost answer carried no command, nothing to put back
   if (this->nextCommand.load() != nullptr)
     return;
+  // While the drive repeats a counter our answer never arrived, so re-sending
+  // is right and at most one copy can land. That rests on the drive holding its
+  // counter until answered, which is a model of it, not a fact about it.
+  // Capped, so a drive that behaves otherwise costs a bounded number of key
+  // presses instead of one per poll for as long as it lasts.
+  if (this->repeatsSent >= MAX_LOST_REPEATS)
+  {
+    ESP_LOGW(TAG_HCI, "drive keeps repeating its counter, giving up on the command");
+    this->lastSentCommand = nullptr;
+    return;
+  }
+  this->repeatsSent++;
   this->repeatCommand = this->lastSentCommand;
   // The drive told us the answer never arrived, so there is nothing left to
   // watch. Leaving the watch standing let the effect guess win over the
   // evidence: any unrelated change of the state word between the two polls
   // counted as "the drive acted" and threw the repeat away.
   this->awaitedCommand = nullptr;
+  this->lastSentCommand = nullptr;
   ESP_LOGI(TAG_HCI, "answer did not reach the drive, sending the command again");
 }
 

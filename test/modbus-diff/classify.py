@@ -70,11 +70,12 @@ def deliberate(frame, old_r, new_r):
         return "identity request riding in the answer"
     body = frame[:-2]
     if len(body) >= 13 and body[12] not in (0x02, 0x03, 0x04):
-        # Nothing knows what to answer. The old side left whatever an earlier
-        # frame had put in those registers and read it straight back out; this
-        # one clears the block and says so with a plain status. The contents
-        # are not comparable, and that is the point of clearing them.
-        return "command %02x is not one we answer, block cleared" % body[12]
+        # Nothing knows what to answer, so the block is cleared and the old
+        # side's leftovers are not comparable. Only excused while the block
+        # really is clear: a door command in there is a defect, not a
+        # difference, and this used to wave through 296 of them.
+        if len(new_r) >= 22 and new_r[14:22] == "00000000":
+            return "command %02x is not one we answer, block cleared" % body[12]
     # The counter's top bit selects the half of a split payload and is not part
     # of the count, so it is no longer echoed. Everything else has to match.
     if len(old_r) >= 12 and len(new_r) == len(old_r):
