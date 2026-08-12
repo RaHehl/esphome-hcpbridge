@@ -107,6 +107,9 @@ public:
 // by the first mark, send it once more; give up at the second and say so.
 static constexpr uint32_t CMD_CONFIRM_MS = 2000;
 static constexpr uint32_t CMD_GIVEUP_MS = 5000;
+// A press the drive never fetched is not delayed, it is stale: nobody is
+// standing there any more.
+static constexpr uint32_t CMD_STALE_MS = 2000;
 
 // Hoermann bus register blocks: the drive writes commands to 0x9C41 and its
 // state to 0x9D31, and reads our answer from 0x9CB9.
@@ -191,6 +194,8 @@ public:
 
     // First register of 0x9C41: high byte counter, low byte command.
     void onCounterWrite(uint16_t val);
+    void checkGotoTarget();
+    bool gotoCheckPending = false;
 
     // After the whole write has landed, so a payload spread over several
     // registers can be read as one.
@@ -219,7 +224,8 @@ public:
     uint16_t regGet(uint16_t addr);
     bool regWrite(uint16_t addr, uint16_t val);
     bool regSetChecked(uint16_t addr, uint16_t val);
-    void onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
+    void onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2,
+                       uint8_t command = 0);
     void reportUnknownShape(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
 
     /** The counter is a delivery receipt: the drive holds its value until it
@@ -260,7 +266,10 @@ private:
     uint16_t regCmd[REG_CMD_COUNT] = {0};         // 0x9C41, written by the drive
     uint16_t regBcast[REG_BCAST_COUNT] = {0};     // 0x9D31, drive state
     uint16_t regResp[REG_RESP_COUNT] = {0};       // 0x9CB9, what we answer with
-    std::atomic<const HoermannCommand *> nextCommand{nullptr};  // shared with the bus task
+    std::atomic<const HoermannCommand *> nextCommand{nullptr};
+    std::atomic<uint32_t> nextCommandOn{0};
+    // Set by a stop on the main task, honoured by the bus task.
+    std::atomic<bool> cancelWatch{false};  // shared with the bus task
 
     // Bus task only. What was sent and how the door looked then, so a missing
     // effect can be told apart from a delivered command.
@@ -270,7 +279,8 @@ private:
     uint8_t awaitedRepeats = 0;
     // The drive's own state word, not our translation of it: a code we do not
     // translate must still count as the drive having reacted.
-    uint16_t rawStateWhenSent = 0;
+    uint32_t stateWrites = 0;        // every change of the drive's state word
+    uint32_t stateWritesWhenSent = 0;
 
 
     bool commandTookEffect() const;

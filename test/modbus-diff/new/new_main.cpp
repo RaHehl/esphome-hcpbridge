@@ -28,6 +28,7 @@ int main() {
   while (std::getline(std::cin, line)) {
     if (line.empty()) continue;
     if (line[0] == 'T') { g_millis = (uint32_t)strtoull(line.c_str() + 1, nullptr, 10); continue; }
+    if (line[0] == 'S') { e.stopDoor(); continue; }
     if (line[0] == 'C') {
       static const HoermannCommand *cmds[7] = {
           &HoermannCommand::STARTOPENDOOR, &HoermannCommand::STARTCLOSEDOOR,

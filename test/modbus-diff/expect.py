@@ -157,6 +157,32 @@ def _():
     assert r[1] & 0xFF == 0xFE, "expected a refusal, got %04x" % r[1]
 
 
+@case("a stop cancels a press that has not gone out yet")
+def _():
+    # The door is closed, so the stop needs no impulse: cancelling the queued
+    # open is the stop. Nothing at all may reach the wire.
+    out = run([poll(0x80), "C%d" % OPEN, "S", poll(0x81), poll(0x82)])[1:]
+    for o in out:
+        r = answer_regs(o)
+        assert r[2] != 0x0110, "the cancelled press reached the wire: %04x" % r[2]
+
+
+@case("a press the drive never fetched goes stale instead of waiting")
+def _():
+    # The drive keeps the link alive with frames that carry no command, so the
+    # press is never fetched. It must not fire minutes later.
+    seq = [poll(0x90), "C%d" % OPEN, "T2000"]
+    # Frames that refresh the link but do not drain the slot.
+    seq += [poll(0x91, command=0x02, read_cnt=5, payload=(0x00, 0x00, 0x00, 0x00))]
+    seq += ["T9000", poll(0x92), poll(0x93)]
+    out = run(seq)
+    for o in out:
+        r = answer_regs(o)
+        if r is None:
+            continue
+        assert r[2] != 0x0110, "a stale press reached the wire: %04x" % r[2]
+
+
 def main():
     failed = 0
     for name, fn in CASES:

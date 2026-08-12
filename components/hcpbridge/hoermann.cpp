@@ -108,7 +108,11 @@ bool HoermannGarageEngine::regWrite(uint16_t addr, uint16_t val)
   else if (addr == REG_BCAST_BASE + 1)
     this->onDoorPositonChanged(old, val);
   else if (addr == REG_BCAST_BASE + 2)
+  {
+    if (old != val)
+      this->stateWrites++;
     this->onCurrentStateChanged(old, val);
+  }
   else if (addr == REG_BCAST_BASE + 6)
     this->onRegSevenChanged(old, val);
   *p = val;
@@ -158,9 +162,14 @@ void HoermannGarageEngine::reportUnknownShape(uint8_t fc, uint16_t a1, uint16_t 
  * The former onRequest callback. The library ran it for every function code it
  * knew, before any validation.
  */
-void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2)
+void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2,
+                                        uint16_t c2, uint8_t command)
 {
-  if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x02 && a1 == REG_RESP_BASE && c1 == 0x08)
+  // The command byte decides, not the register counts alone: a transfer written
+  // as two registers used to land here and take a queued press with it, and the
+  // answer that would have carried it is overwritten later anyway.
+  if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x02 && a1 == REG_RESP_BASE && c1 == 0x08 &&
+      command == CMD_STATUS)
   {
     this->regResp[0] = 0x0000;
     this->regResp[1] = RESP_STATUS;
@@ -278,6 +287,10 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
   this->lastFrameOn.store(now == 0 ? 1 : now);
 
   const uint8_t fc = req[1];
+  // A read/write frame to the broadcast address is never answered, so running
+  // it would consume a queued press for nothing.
+  if (req[0] == 0x00 && fc == 0x17)
+    return 0;
 
   if (fc == 0x17)
   {
@@ -301,7 +314,7 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
                writeAddr, REG_RESP_BASE, REG_CMD_BASE);
       return 0;
     }
-    if (readCnt < 1 || readCnt > MODBUS_MAX_WORDS || writeCnt < 1 ||
+    if (readCnt < 1 || readCnt > REG_RESP_COUNT || writeCnt < 1 ||
         (0xFFFF - readAddr) < readCnt || byteCnt != 2 * writeCnt)
       return 0;
     // One to nine registers; anything longer has no room in the block.
@@ -319,7 +332,7 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     // re-sent a door command that had already been delivered.
     this->lastSentCommand = nullptr;
 
-    this->onRequestHook(fc, readAddr, readCnt, writeAddr, writeCnt);
+    this->onRequestHook(fc, readAddr, readCnt, writeAddr, writeCnt, wdata[1]);
 
     for (uint16_t i = 0; i < writeCnt; i++)
       this->regSetChecked((uint16_t)(writeAddr + i), rd16(wdata + 2 * i));
@@ -365,6 +378,7 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
 
     for (uint16_t i = 0; i < cnt; i++)
       this->regSetChecked((uint16_t)(addr + i), rd16(wdata + 2 * i));
+    this->checkGotoTarget();
 
     // Built for completeness; the frame layer never sends an answer to a
     // broadcast.
@@ -400,7 +414,25 @@ void HoermannGarageEngine::setCommandValuesToRead()
 
   // Written once, then gone: the answer is rebuilt from nothing on every poll,
   // so a command that is not put back in is simply not there any more.
+  // The watch is the bus task's, so a stop from the other side asks rather than
+  // reaches in.
+  if (this->cancelWatch.exchange(false))
+  {
+    this->awaitedCommand = nullptr;
+    this->repeatCommand = nullptr;
+  }
+
   const HoermannCommand *cmd = this->nextCommand.load();
+  // A press only goes out while somebody could still be standing there. The
+  // drive answers within one poll, so anything older than this waited for a
+  // frame that never came: an enumeration burst, or a bus that was talking but
+  // not to us.
+  if (cmd != nullptr && (esphome::millis() - this->nextCommandOn.load()) > CMD_STALE_MS)
+  {
+    ESP_LOGW(TAG_HCI, "dropping a command the drive did not fetch in time");
+    this->nextCommand.store(nullptr);
+    cmd = nullptr;
+  }
   if (cmd != nullptr)
   {
     // A press always wins over a repeat of our own.
@@ -412,7 +444,7 @@ void HoermannGarageEngine::setCommandValuesToRead()
     this->awaitedCommand = cmd;
     this->awaitedSince = esphome::millis();
     this->awaitedRepeats = 0;
-    this->rawStateWhenSent = this->regBcast[2];
+    this->stateWritesWhenSent = this->stateWrites;
   }
   else if (this->repeatCommand != nullptr && this->repeatStillMakesSense())
   {
@@ -420,6 +452,10 @@ void HoermannGarageEngine::setCommandValuesToRead()
     activeCommandValues(cmd, &regPlug2Value, &regPlug3Value);
     ESP_LOGI(TAG_HCI, "repeating command %x %x", regPlug2Value, regPlug3Value);
     this->repeatCommand = nullptr;
+    // The drive's grace period runs from the copy it actually received, not
+    // from the one that was lost, or one press ends up on the wire three times.
+    this->awaitedSince = esphome::millis();
+    this->awaitedRepeats = 0;
   }
   else if (this->repeatCommand != nullptr)
   {
@@ -456,9 +492,10 @@ bool HoermannGarageEngine::commandReached(const HoermannCommand *cmd) const
 
 bool HoermannGarageEngine::commandTookEffect() const
 {
-  // Any change is a reaction: a drive that stopped the door answered, and so
-  // did a state code we do not translate.
-  if (this->regBcast[2] != this->rawStateWhenSent)
+  // Counted, not compared: a door that started and was stopped again between
+  // two polls comes back to the same word, and a value test reads that as the
+  // drive having done nothing.
+  if (this->stateWrites != this->stateWritesWhenSent)
     return true;
   // Otherwise the destination counts, so asking an open door to open is not
   // taken for a failure.
@@ -515,6 +552,10 @@ void HoermannGarageEngine::checkCommandEffect()
     activeCommandValues(awaited, &shown2, &shown3);
     ESP_LOGW(TAG_HCI, "drive did not act on command %x %x", shown2, shown3);
     this->awaitedCommand = nullptr;
+    this->repeatCommand = nullptr;
+    // A target outliving the command that created it hijacks the next run in
+    // that direction, whoever started it.
+    this->state->setGotoPosition(0.0f);
     return;
   }
   if (waited > CMD_CONFIRM_MS && this->awaitedRepeats == 0)
@@ -530,12 +571,11 @@ void HoermannGarageEngine::onDoorPositonChanged(uint16_t oldVal, uint16_t val)
   if ((oldVal & 0x00FF) != (val & 0x00FF))
   {
     this->state->setCurrentPosition((float)(val & 0x00FF) / 200.0f);
-    if ((this->state->gotoPosition > 0.0f && this->state->state == HoermannState::State::CLOSING && this->state->gotoPosition >= this->state->currentPosition) ||
-        (this->state->gotoPosition > 0.0f && this->state->state == HoermannState::State::OPENING && this->state->gotoPosition <= this->state->currentPosition))
-    {
-      this->stopDoor();
-      this->state->setGotoPosition(0.0f);
-    }
+    // Decided after the whole telegram, not here. Registers are applied in
+    // address order, so the state this would test is still the previous
+    // telegram's: one that reports both "past the target" and "stopped" would
+    // fire an impulse at a door somebody had just stopped.
+    this->gotoCheckPending = true;
   }
   // on Second Byte changed (target)
   if ((oldVal & 0xFF00) != (val & 0xFF00))
@@ -620,9 +660,30 @@ void HoermannGarageEngine::onRegSevenChanged(uint16_t oldVal, uint16_t val)
 /**
  * Write on 0x9C41 , byte1: counter, byte2: command
  */
+/** The go-to-position stop, once the whole broadcast has been applied. */
+void HoermannGarageEngine::checkGotoTarget()
+{
+  if (!this->gotoCheckPending)
+    return;
+  this->gotoCheckPending = false;
+  const float target = this->state->gotoPosition;
+  if (target <= 0.0f)
+    return;
+  const HoermannState::State now = this->state->state;
+  const bool arrived = (now == HoermannState::CLOSING && target >= this->state->currentPosition) ||
+                       (now == HoermannState::OPENING && target <= this->state->currentPosition);
+  if (!arrived)
+    return;
+  // Only a stop that was actually issued may clear the target; otherwise the
+  // door runs to the end stop with nothing left to retry from.
+  if (this->stopDoor())
+    this->state->setGotoPosition(0.0f);
+}
+
 void HoermannGarageEngine::onCounterWrite(uint16_t val)
 {
-  uint16_t counter = val & 0xFF00;
+  // Top bit selects the half of a split payload; it is not part of the count.
+  uint16_t counter = val & 0x7F00;
   uint16_t command = (val & 0x00FF) << 8;
   this->regResp[0] |= counter;
   this->regResp[1] |= command;
@@ -679,6 +740,11 @@ void HoermannGarageEngine::rearmLostCommand()
   if (this->nextCommand.load() != nullptr)
     return;
   this->repeatCommand = this->lastSentCommand;
+  // The drive told us the answer never arrived, so there is nothing left to
+  // watch. Leaving the watch standing let the effect guess win over the
+  // evidence: any unrelated change of the state word between the two polls
+  // counted as "the drive acted" and threw the repeat away.
+  this->awaitedCommand = nullptr;
   ESP_LOGI(TAG_HCI, "answer did not reach the drive, sending the command again");
 }
 
@@ -854,6 +920,11 @@ void HoermannGarageEngine::checkBusSilence()
 
 bool HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count)
 {
+  // A payload for a request that is no longer open is a late resend. Taking it
+  // would restart the retry clock of whatever is outstanding now.
+  const uint8_t answers = subCode == IDENT_SUB_SERIAL ? IDENT_REQ_SERIAL : IDENT_REQ_FIRMWARE;
+  if (this->identityWanted != answers)
+    return false;
   // The payload starts one register behind the sub code.
   const uint8_t firstPayloadReg = 2;
   const uint16_t payloadRegs = count > firstPayloadReg ? count - firstPayloadReg : 0;
@@ -916,6 +987,7 @@ bool HoermannGarageEngine::setCommand(bool cond, const HoermannCommand *command)
       ESP_LOGW(TAG_HCI, "no command sent, the drive is not talking to us");
       return false;
     }
+    this->nextCommandOn.store(esphome::millis());
     // Set from the main loop, read by the bus task on core 1. The pointer
     // store is atomic on ESP32, the test-and-set below is not.
     const HoermannCommand *expected = nullptr;
@@ -933,11 +1005,25 @@ bool HoermannGarageEngine::setCommand(bool cond, const HoermannCommand *command)
  */
 bool HoermannGarageEngine::stopDoor()
 {
-  //only send impulse if door is in a moving state
-  return setCommand( this->state->state == HoermannState::State::CLOSING || 
-              this->state->state == HoermannState::State::OPENING ||
-              this->state->state == HoermannState::State::MOVE_HALF ||
-              this->state->state == HoermannState::State::MOVE_VENTING , &HoermannCommand::STARTIMPULSE);
+  // A stop outranks whatever is queued. Competing for the slot meant the last
+  // thing the user pressed could lose to the one before it: a stop while an
+  // open was still waiting was reported as accepted and the door opened.
+  const HoermannState::State now = this->state->state;
+  const bool moving = now == HoermannState::CLOSING || now == HoermannState::OPENING ||
+                      now == HoermannState::MOVE_HALF || now == HoermannState::MOVE_VENTING;
+  if (!this->state->valid)
+  {
+    ESP_LOGW(TAG_HCI, "no stop sent, the drive is not talking to us");
+    return false;
+  }
+  // A door that is not moving needs no impulse; cancelling what was queued is
+  // the stop. One that is moving needs one, and it replaces the queue.
+  this->nextCommand.store(moving ? &HoermannCommand::STARTIMPULSE : nullptr);
+  this->nextCommandOn.store(esphome::millis());
+  // The watch belongs to the bus task, so it is asked to drop it rather than
+  // reached into from here.
+  this->cancelWatch.store(true);
+  return true;
 }
 bool HoermannGarageEngine::closeDoor()
 {
