@@ -25,7 +25,6 @@ class HCPBridgeSwitchVent : public switch_::Switch, public Component {
     HCPBridge *parent_;
 };
 
-// Class for Half Switch
 class HCPBridgeSwitchHalf : public switch_::Switch, public Component {
   public:
     void set_hcpbridge_parent(HCPBridge *parent) { this->parent_ = parent; }

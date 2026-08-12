@@ -13,12 +13,8 @@ namespace hcpbridge {
 class HCPBridge : public PollingComponent {
  public:
   void setup() override;
-  // The drive starts polling us the moment it sees power, and it counts the
-  // polls we do not answer. At the default priority the serial port comes up
-  // somewhere in the middle of the startup order, which leaves the drive
-  // talking to an address that says nothing for as long as everything before us
-  // takes. We own a bus, so we belong at the front of the queue with the other
-  // buses.
+  // The drive polls from the moment it has power and counts the polls we do
+  // not answer, so the port has to come up before everything else.
   float get_setup_priority() const override { return setup_priority::BUS; }
   void update() override;
   void on_shutdown() override;

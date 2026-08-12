@@ -82,7 +82,6 @@ void HCPBridgeCover::on_event_triggered() {
   float currentPosition = state->currentPosition;
   HoermannState::State stateValue = state->state;
 
-  // Determine current operation based on state and position
   switch (stateValue) {
     case HoermannState::OPENING:
       this->current_operation = cover::COVER_OPERATION_OPENING;

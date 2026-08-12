@@ -18,11 +18,9 @@ void HCPBridgeLight::setup() {
 }
 
 void HCPBridgeLight::write_state(light::LightState *state) {
-  // ESPHome performs a call while the light sets up, to apply restore_mode.
-  // That call arrives here as a request, and with the bus task already
-  // answering it would switch the drive's lamp off at every boot without
-  // anyone asking. Nothing goes out until the drive has told us once what its
-  // lamp is doing.
+  // ESPHome performs a call while the light sets up, to apply restore_mode,
+  // and that would switch the drive's lamp off at every boot without anyone
+  // asking.
   if (!this->sawDrive_) {
     return;
   }
@@ -33,11 +31,9 @@ void HCPBridgeLight::write_state(light::LightState *state) {
   else
     this->output_->turn_off();
 
-  // The light component publishes what was asked for, not what happened. With
-  // no drive on the other end that published value is a claim about a lamp
-  // nobody switched: the request was refused, yet Home Assistant shows the
-  // light as on and keeps showing it, because the correction below only runs
-  // when the drive reports something. Put the last thing it did report back.
+  // The component publishes what was asked for, not what happened, and the
+  // correction below only runs while the drive reports something. Without this
+  // a refused request leaves Home Assistant showing a lamp nobody switched.
   if (!this->parent_->engine->state->valid)
     this->sync_from_drive();
 }

@@ -111,9 +111,8 @@ static constexpr uint32_t CMD_GIVEUP_MS = 5000;
 // Hoermann bus register blocks: the drive writes commands to 0x9C41 and its
 // state to 0x9D31, and reads our answer from 0x9CB9.
 static constexpr uint16_t REG_CMD_BASE = 0x9C41;
-// Nine, not three: normal traffic writes two or three registers here, but the
-// drive answers an identity request by writing its payload into the same block,
-// up to 0x9C49.
+// Nine, not three: the drive answers an identity request by writing its payload
+// into this same block.
 static constexpr uint32_t REG_CMD_COUNT = 9;
 static constexpr uint16_t REG_BCAST_BASE = 0x9D31;
 static constexpr uint32_t REG_BCAST_COUNT = 9;
@@ -144,9 +143,8 @@ static constexpr uint32_t IDENT_MAX_ATTEMPTS = 3;
 // and confirms with its own sub code naming the address it is pausing.
 static constexpr uint16_t IDENT_SUB_PAUSE_ACK = 0x19;
 static constexpr uint32_t PAUSE_ACK_WAIT_MS = 3000;
-// After the pause is confirmed the bus task can still be in the middle of a
-// frame. Restarting into that leaves half a telegram on the wire, which is
-// exactly what makes a drive treat an accessory as faulty.
+// Restarting mid frame leaves half a telegram on the wire, which is what makes
+// a drive call an accessory faulty.
 static constexpr uint32_t PAUSE_SETTLE_MS = 1000;
 // A stretch this long with nothing arriving means no telegram is in flight.
 static constexpr uint32_t PAUSE_QUIET_MS = 40;
@@ -191,25 +189,18 @@ public:
     void onCurrentStateChanged(uint16_t oldVal, uint16_t val);
     void onRegSevenChanged(uint16_t oldVal, uint16_t val);
 
-    /**
-     * Write on 0x9C41 , byte1: counter, byte2: command
-     */
+    // First register of 0x9C41: high byte counter, low byte command.
     void onCounterWrite(uint16_t val);
 
-    /**
-     * Runs once all registers of a write have landed, so a payload spread over
-     * several registers can be read as a whole.
-     */
+    // After the whole write has landed, so a payload spread over several
+    // registers can be read as one.
     void onWriteBlockComplete(uint16_t addr, uint16_t count);
 
     /** Ask the drive for its serial number, then its firmware version. */
     void requestDriveIdentity();
 
-     /**
-     * Tell the drive we are about to go quiet and wait for it to confirm.
-     * Returns false if it stayed silent, in which case the caller should carry
-     * on anyway; a restart must not hang on a bus that is already gone.
-     */
+    /** False if the drive stayed silent. Carry on anyway: a restart must not
+     *  hang on a bus that is already gone. */
     bool announcePause(uint32_t timeoutMs);
 
     /** Waits out any frame still on the wire before the caller restarts. */
@@ -219,16 +210,10 @@ public:
     /** Drops the connected state once the drive has gone quiet for too long. */
     void checkBusSilence();
 
-    /**
-     * Moves a finished identity answer into the state. Runs in the main task:
-     * the bus task only ever fills a plain buffer, so the std::string that the
-     * sensors read is never written from two places at once.
-     */
+    /** Main task only, so the string the sensors read has one writer. */
     void publishIdentity();
 
-    // One register map across all three blocks, as the replaced library had.
-    // Every function code goes through it, so callbacks fire no matter which
-    // one wrote.
+    // One map for all three blocks, so callbacks fire whichever code wrote.
     uint16_t *regPtr(uint16_t addr);
     bool regExists(uint16_t addr) { return this->regPtr(addr) != nullptr; }
     uint16_t regGet(uint16_t addr);
@@ -237,13 +222,8 @@ public:
     void onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
     void reportUnknownShape(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
 
-    /**
-     * The counter byte is a delivery receipt. The drive holds its value until
-     * it has been answered, so a value that fails to advance says the previous
-     * answer never arrived. Running the count ourselves is what makes that
-     * visible; the byte we send is the same either way, because our count is
-     * the drive's own value carried forward.
-     */
+    /** The counter is a delivery receipt: the drive holds its value until it
+     *  has been answered, so one that fails to advance means ours was lost. */
     void syncCounter(uint8_t counterByte, uint8_t command);
     void advanceCounter();
     void rearmLostCommand();
@@ -262,16 +242,9 @@ public:
     uint16_t unknownA1 = 0, unknownC1 = 0, unknownA2 = 0, unknownC2 = 0;
     uint32_t unknownLoggedOn = 0;
 
-    /**
-     * Helper to set next Command and *not* skip Current Command before end was
-     * sent. Returns false when the slot was still occupied, i.e. the command
-     * was dropped.
-     */
+    /** False when the slot was occupied and the command was dropped. */
     bool setCommand(bool cond, const HoermannCommand *command);
 
-    /**
-     * Control Functions
-     */
     bool stopDoor();
     bool closeDoor();
     bool openDoor();
@@ -289,9 +262,8 @@ private:
     uint16_t regResp[REG_RESP_COUNT] = {0};       // 0x9CB9, what we answer with
     std::atomic<const HoermannCommand *> nextCommand{nullptr};  // shared with the bus task
 
-    // Bus task only. What was sent and what the door looked like at the time,
-    // so the effect can be recognised and the command sent again if there was
-    // none. A repeat needs no slot of its own now that a command is one frame.
+    // Bus task only. What was sent and how the door looked then, so a missing
+    // effect can be told apart from a delivered command.
     const HoermannCommand *awaitedCommand = nullptr;
     const HoermannCommand *repeatCommand = nullptr;
     uint32_t awaitedSince = 0;
@@ -306,9 +278,8 @@ private:
     bool repeatStillMakesSense() const;
     void checkCommandEffect();
 
-    // Identity exchange. The drive only ever answers a request that rode along
-    // with a poll, and it takes the request out of the answer slot again, so a
-    // request that goes unanswered has to be repeated.
+    // The drive only answers a request that rode along with a poll, and takes
+    // it back out of the slot, so an unanswered one has to be repeated.
     uint8_t identityWanted = 0;      // 0 = nothing, else IDENT_REQ_*
     uint8_t identityAttempts = 0;
     uint32_t identityAskedOn = 0;

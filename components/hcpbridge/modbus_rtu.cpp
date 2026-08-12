@@ -7,12 +7,9 @@ namespace hcpbridge {
 
 static const char *const TAG = "hcpbridge.rtu";
 
-// These sit in the receive path, and a bus with nothing on the other end can
-// produce one event per idle period. Logging each of them turns a quiet fault
-// into a stream that blocks the very task the drive is waiting on, so only the
-// first of a run is reported and then every so often. Counted rather than
-// timed, because this file is deliberately free of any dependency beyond the
-// UART driver.
+// A bus with nothing on the other end produces one event per idle period, and
+// logging each would block the task the drive is waiting on. Counted rather
+// than timed, to keep this file free of anything but the UART driver.
 static const uint32_t RTU_WARN_EVERY = 256;
 static uint32_t rtu_warn_seen = 0;
 static bool rtu_warn_due() { return (rtu_warn_seen++ % RTU_WARN_EVERY) == 0; }
@@ -68,13 +65,11 @@ bool ModbusRtuServer::begin(uart_port_t port, int rx_pin, int tx_pin, int rts_pi
     // Half duplex transceiver: the driver toggles RTS around transmission.
     uart_set_mode(this->port_, UART_MODE_RS485_HALF_DUPLEX);
   }
-  // Frame end is silence on the line. Careful with the unit: the driver counts
-  // SYMBOL times, and a symbol here is eleven bits (start + 8 data + parity +
-  // stop at 8E1), so the ten below are 110 bit times, about 1.9 ms at this baud
-  // rate. That is deliberate and matches what the replaced library waited: a
+  // Mind the unit: the driver counts SYMBOL times, eleven bits at 8E1, so this
+  // is about 1.9 ms. Deliberate, and the same wait the replaced library had: a
   // drive pausing mid frame would otherwise yield two useless halves. It is
-  // also the largest single delay in front of any answer we send, so it is the
-  // first place to look if the drive ever turns out to be impatient.
+  // also the largest delay in front of any answer, so look here first if the
+  // drive ever turns out to be impatient.
   const uint32_t symbol_us = 11UL * 1000000UL / baud;      // eleven bits per symbol at 8E1
   uint32_t symbols = (1750UL + symbol_us - 1) / symbol_us; // round up
   if (symbols < 4)
@@ -125,10 +120,8 @@ void ModbusRtuServer::poll(uint32_t timeout_ms) {
     return;
 
   size_t n = static_cast<size_t>(len);
-  // The driver also raises an event on a full RX buffer, not just on silence,
-  // so frames above the threshold arrive in pieces that each fail the CRC.
-  // Read on until the line is quiet, but only then: short frames - all the
-  // drive ever sends - keep their zero extra latency.
+  // The driver also raises an event on a full buffer, so a long frame arrives
+  // in pieces that each fail the CRC. Only then is it worth waiting.
   while (n >= RX_FULL_THRESHOLD && n < sizeof(this->rx_buf_)) {
     int more = uart_read_bytes(this->port_, this->rx_buf_ + n, sizeof(this->rx_buf_) - n,
                                pdMS_TO_TICKS(3));

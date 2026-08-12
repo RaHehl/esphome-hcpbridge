@@ -36,9 +36,9 @@ void HCPBridge::announce_pause() {
   if (this->engine == nullptr) {
     return;
   }
-  // Meant for an on_begin trigger of the update platform: by the time a restart
-  // happens the bus has been unanswered for the whole transfer already, because
-  // writing flash stops the serial driver from running.
+  // For an ota on_begin trigger: writing flash stops the serial driver, so by
+  // the time a restart happens the bus has been unanswered for the whole
+  // transfer.
   if (this->engine->announcePause(PAUSE_ACK_WAIT_MS)) {
     ESP_LOGI(TAG, "drive confirmed the pause");
   } else {
