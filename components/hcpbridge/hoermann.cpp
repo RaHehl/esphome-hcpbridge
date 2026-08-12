@@ -178,6 +178,14 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
     this->regResp[3] = 0x10ff;
     this->regResp[4] = 0xa845;
   }
+  else if (fc == 0x17 && a2 == REG_CMD_BASE && c2 > 0x03 && a1 == REG_RESP_BASE)
+  {
+    // The drive is handing us a payload rather than asking for anything. Clear
+    // the answer registers; onWriteBlockComplete fills in the acknowledgement
+    // once the payload has landed.
+    this->regResp[0] = 0x0000;
+    this->regResp[1] = 0x0000;
+  }
   else if (fc == 0x10 && a1 == REG_BCAST_BASE)
   {
     // Drive state broadcast, nothing to prepare
@@ -595,9 +603,10 @@ void HoermannGarageEngine::reportShape(uint16_t writeCount)
     this->seenShapes[this->seenShapeCount++] = {wc, rc, command, sub};
   }
 
-  char payload[3 * REG_CMD_COUNT + 1] = {0};
-  int at = 0;
-  for (uint16_t i = 0; i < writeCount && i < REG_CMD_COUNT; i++)
+  // Five characters per register, four digits and a blank.
+  char payload[5 * REG_CMD_COUNT + 1] = {0};
+  size_t at = 0;
+  for (uint16_t i = 0; i < writeCount && i < REG_CMD_COUNT && at + 1 < sizeof(payload); i++)
     at += snprintf(payload + at, sizeof(payload) - at, "%04x ", this->regCmd[i]);
   ESP_LOGI(TAG_HCI, "request shape: wrote %u, read %u, command %02x, sub %02x, data %s", wc, rc,
            command, sub, payload);
