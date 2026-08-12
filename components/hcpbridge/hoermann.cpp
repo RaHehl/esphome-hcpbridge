@@ -120,6 +120,33 @@ bool HoermannGarageEngine::regSetChecked(uint16_t addr, uint16_t val)
 }
 
 /**
+ * A frame we have no branch for. We answer it with an answer code of zero,
+ * which the protocol does not define, so knowing the exact shape matters more
+ * than knowing that it happened. Repeats are throttled, but a shape we have
+ * not seen before is always reported: the interesting ones appear in bursts
+ * while the drive takes an accessory back on the bus.
+ */
+void HoermannGarageEngine::reportUnknownShape(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2,
+                                              uint16_t c2)
+{
+  const uint32_t now = esphome::millis();
+  const bool sameShape = this->unknownSeen && this->unknownFc == fc && this->unknownA1 == a1 &&
+                         this->unknownC1 == c1 && this->unknownA2 == a2 && this->unknownC2 == c2;
+  // Subtract, never add: adding overflows when millis() wraps.
+  if (sameShape && (now - this->unknownLoggedOn) < UNKNOWN_SHAPE_REPEAT_MS)
+    return;
+  this->unknownSeen = true;
+  this->unknownFc = fc;
+  this->unknownA1 = a1;
+  this->unknownC1 = c1;
+  this->unknownA2 = a2;
+  this->unknownC2 = c2;
+  this->unknownLoggedOn = now;
+  ESP_LOGW(TAG_HCI, "unanswerable frame fc=%02x read %04x x%u write %04x x%u", fc, a1, (unsigned)c1,
+           a2, (unsigned)c2);
+}
+
+/**
  * The former onRequest callback. The library ran it for every function code it
  * knew, before any validation.
  */
@@ -216,7 +243,7 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
     // time. Zeroing also turns the OR in onCounterWrite into a plain write.
     for (uint8_t i = 0; i < REG_RESP_COUNT; i++)
       this->regResp[i] = 0x0000;
-    ESP_LOGW(TAG_HCI, "unknown function code fc=%x", fc);
+    this->reportUnknownShape(fc, a1, c1, a2, c2);
   }
   this->state->setValid(true);
 }

@@ -154,6 +154,10 @@ static_assert(2 + IDENT_FIRMWARE_LEN / 2 <= REG_CMD_COUNT, "firmware payload exc
 // link is gone, not that the drive has nothing to say.
 #define BUS_SILENCE_MS 20000
 
+// A frame shape we cannot answer properly repeats as fast as the drive polls,
+// so the same one is only reported this often. A different shape is immediate.
+#define UNKNOWN_SHAPE_REPEAT_MS 10000
+
 // Answer codes we put in the low byte of the second answer register.
 #define RESP_STATUS 0x01
 #define RESP_REQUEST 0x22
@@ -228,6 +232,14 @@ public:
     bool regWrite(uint16_t addr, uint16_t val);       // wie Reg(addr,val)
     bool regSetChecked(uint16_t addr, uint16_t val);  // wie setMultipleWords je Register
     void onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
+    void reportUnknownShape(uint8_t fc, uint16_t a1, uint16_t c1, uint16_t a2, uint16_t c2);
+
+    // Last frame shape we had no branch for, so a repeat can be told from a new
+    // one. Only ever touched from the bus task.
+    bool unknownSeen = false;
+    uint8_t unknownFc = 0;
+    uint16_t unknownA1 = 0, unknownC1 = 0, unknownA2 = 0, unknownC2 = 0;
+    uint32_t unknownLoggedOn = 0;
 
     /**
      * Helper to set next Command and *not* skip Current Command before end was
