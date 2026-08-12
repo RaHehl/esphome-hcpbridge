@@ -123,7 +123,10 @@ public:
 #define IDENT_REQ_FIRMWARE 0x06
 #define IDENT_SUB_SERIAL 0x0C
 #define IDENT_SUB_FIRMWARE 0x0D
-#define IDENT_SERIAL_LEN 26
+// Fourteen bytes then twelve, seven registers then six.
+#define SERIAL_FIRST_REGS 7
+#define SERIAL_SECOND_REGS 6
+#define IDENT_SERIAL_LEN ((SERIAL_FIRST_REGS + SERIAL_SECOND_REGS) * 2)
 #define IDENT_FIRMWARE_LEN 12
 #define IDENT_RETRY_MS 30000
 #define IDENT_MAX_ATTEMPTS 3
@@ -185,6 +188,13 @@ public:
     /** Drops the connected state once the drive has gone quiet for too long. */
     void checkBusSilence();
 
+    /**
+     * Moves a finished identity answer into the state. Runs in the main task:
+     * the bus task only ever fills a plain buffer, so the std::string that the
+     * sensors read is never written from two places at once.
+     */
+    void publishIdentity();
+
     // One register map across all three blocks, as the replaced library had.
     // Every function code goes through it, so callbacks fire no matter which
     // one wrote.
@@ -231,7 +241,16 @@ private:
     uint8_t identityWanted = 0;      // 0 = nothing, else IDENT_REQ_*
     uint8_t identityAttempts = 0;
     uint32_t identityAskedOn = 0;
+    // A separate flag, not identityAskedOn == 0: millis() really is 0 for the
+    // first millisecond and wraps back through it every 49.7 days.
+    bool identityAsked = false;
     bool identityStarted = false;
+
+    // Handed from the bus task to the main task: buffer first, flag second.
+    char identSerial[IDENT_SERIAL_LEN + 1] = {0};
+    char identFirmware[IDENT_FIRMWARE_LEN + 1] = {0};
+    std::atomic<bool> identSerialReady{false};
+    std::atomic<bool> identFirmwareReady{false};
     uint8_t serialBuf[IDENT_SERIAL_LEN] = {0};
     bool serialFirstHalfSeen = false;
 

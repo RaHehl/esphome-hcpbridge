@@ -17,6 +17,7 @@ void HCPBridge::add_on_state_callback(std::function<void()> &&callback) {
 }
 
 void HCPBridge::update() {
+  this->engine->publishIdentity();
   this->engine->checkBusSilence();
   if (this->engine->state->changed) {
     this->engine->state->clearChanged();

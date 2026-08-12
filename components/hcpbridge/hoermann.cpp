@@ -122,13 +122,13 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
   {
     this->regResp[0] = 0x0000;
     this->regResp[1] = RESP_STATUS;
-    setCommandValuesToRead();
     this->regResp[4] = 0x0000;
     this->regResp[5] = 0x0000;
     this->regResp[6] = 0x0000;
     this->regResp[7] = 0x0000;
 
-    // Going away takes precedence over anything we might still want to say.
+    // Checked before the command slot is read, so a press that is still waiting
+    // stays waiting instead of being consumed by a frame that does not carry it.
     if (this->leaveRequested.load())
     {
       this->regResp[1] = RESP_LEAVE;
@@ -137,6 +137,7 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
       this->state->setValid(true);
       return;
     }
+    setCommandValuesToRead();
 
     // The first answered poll means the drive is talking to us, so this is the
     // point to find out who it is.
@@ -150,7 +151,7 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
     if (this->identityWanted != 0 && this->regResp[2] == 0x0000 && this->regResp[3] == 0x0000)
     {
       const uint32_t now = esphome::millis();
-      const bool firstTry = this->identityAskedOn == 0;
+      const bool firstTry = !this->identityAsked;
       // Subtract, never add: adding overflows when millis() wraps.
       if (firstTry || (now - this->identityAskedOn) > IDENT_RETRY_MS)
       {
@@ -164,6 +165,7 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
         {
           this->identityAttempts++;
           this->identityAskedOn = now;
+          this->identityAsked = true;
           this->regResp[1] = RESP_REQUEST;
           this->regResp[2] = (uint16_t)(this->identityWanted << 8);
           this->regResp[3] = 0x0000;
@@ -567,6 +569,7 @@ void HoermannGarageEngine::armIdentityRequest(uint8_t request)
   this->identityWanted = request;
   this->identityAttempts = 0;
   this->identityAskedOn = 0;
+  this->identityAsked = false;
   this->serialFirstHalfSeen = false;
 }
 
@@ -583,18 +586,18 @@ void HoermannGarageEngine::copyRegsToBytes(uint8_t firstReg, uint8_t regCount, u
 
 // Trailing padding varies, and anything unprintable would only confuse a text
 // sensor, so cut at the first byte that is neither.
-static std::string identityToText(const uint8_t *data, size_t len)
+static void identityToText(const uint8_t *data, size_t len, char *out, size_t outSize)
 {
-  std::string out;
-  for (size_t i = 0; i < len; i++)
+  size_t at = 0;
+  for (size_t i = 0; i < len && at + 1 < outSize; i++)
   {
     if (data[i] < 0x20 || data[i] > 0x7E)
       break;
-    out.push_back((char)data[i]);
+    out[at++] = (char)data[i];
   }
-  while (!out.empty() && out.back() == ' ')
-    out.pop_back();
-  return out;
+  while (at > 0 && out[at - 1] == ' ')
+    at--;
+  out[at] = '\0';
 }
 
 void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
@@ -633,10 +636,24 @@ bool HoermannGarageEngine::leaveBus(uint32_t timeoutMs)
   while ((esphome::millis() - started) < timeoutMs)
   {
     if (this->leaveConfirmed.load())
+    {
+      this->leaveRequested.store(false);
       return true;
+    }
     vTaskDelay(pdMS_TO_TICKS(10));
   }
+  // Back to answering normally: a restart that never happens must not leave the
+  // bridge saying goodbye for ever.
+  this->leaveRequested.store(false);
   return false;
+}
+
+void HoermannGarageEngine::publishIdentity()
+{
+  if (this->identSerialReady.exchange(false))
+    this->state->setSerialNumber(this->identSerial);
+  if (this->identFirmwareReady.exchange(false))
+    this->state->setFirmwareVersion(this->identFirmware);
 }
 
 void HoermannGarageEngine::checkBusSilence()
@@ -658,28 +675,34 @@ void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, 
   {
     uint8_t buf[IDENT_FIRMWARE_LEN];
     this->copyRegsToBytes(firstPayloadReg, IDENT_FIRMWARE_LEN / 2, buf);
-    this->state->setFirmwareVersion(identityToText(buf, sizeof(buf)));
+    identityToText(buf, sizeof(buf), this->identFirmware, sizeof(this->identFirmware));
+    this->identFirmwareReady.store(true);
     this->identityWanted = 0;
-    ESP_LOGI(TAG_HCI, "drive firmware version %s", this->state->firmwareVersion.c_str());
+    ESP_LOGI(TAG_HCI, "drive firmware version %s", this->identFirmware);
   }
-  else if (subCode == IDENT_SUB_SERIAL && payloadRegs >= 6)
+  else if (subCode == IDENT_SUB_SERIAL)
   {
     // Split over two writes, the top bit of the counter byte marks the first.
+    // The halves are of different length, so each is checked against its own,
+    // otherwise a short frame would be padded out with whatever the registers
+    // happened to hold from an earlier one.
     const bool firstHalf = (counterByte & 0x80) != 0;
-    if (firstHalf)
+    if (firstHalf && payloadRegs >= SERIAL_FIRST_REGS)
     {
-      this->copyRegsToBytes(firstPayloadReg, 7, this->serialBuf);
+      this->copyRegsToBytes(firstPayloadReg, SERIAL_FIRST_REGS, this->serialBuf);
       this->serialFirstHalfSeen = true;
       // Half an answer is still progress, so do not let the retry count run
       // out while the drive is in the middle of handing the payload over.
       this->identityAttempts = 0;
       this->identityAskedOn = esphome::millis();
+      this->identityAsked = true;
     }
-    else if (this->serialFirstHalfSeen)
+    else if (!firstHalf && this->serialFirstHalfSeen && payloadRegs >= SERIAL_SECOND_REGS)
     {
-      this->copyRegsToBytes(firstPayloadReg, 6, this->serialBuf + 14);
+      this->copyRegsToBytes(firstPayloadReg, SERIAL_SECOND_REGS, this->serialBuf + 2 * SERIAL_FIRST_REGS);
       this->serialFirstHalfSeen = false;
-      this->state->setSerialNumber(identityToText(this->serialBuf, IDENT_SERIAL_LEN));
+      identityToText(this->serialBuf, IDENT_SERIAL_LEN, this->identSerial, sizeof(this->identSerial));
+      this->identSerialReady.store(true);
       ESP_LOGI(TAG_HCI, "drive serial number received");
       // Identity is only complete with the firmware version, so go straight on.
       this->armIdentityRequest(IDENT_REQ_FIRMWARE);
