@@ -1,7 +1,12 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
-from esphome.components.esp32 import VARIANT_ESP32, VARIANT_ESP32S3, only_on_variant
+from esphome.components.esp32 import (
+    FRAMEWORK_ESP_IDF,
+    VARIANT_ESP32,
+    VARIANT_ESP32S3,
+    only_on_variant,
+)
 from esphome.const import (
     CONF_ID,
     CONF_RX_PIN,
@@ -33,7 +38,7 @@ CONFIG_SCHEMA = cv.All(
         }
     ).extend(cv.polling_component_schema("500ms")),
     cv.only_on_esp32,
-    cv.only_with_esp_idf,
+    cv.only_with_framework(FRAMEWORK_ESP_IDF),
     only_on_variant(supported=[VARIANT_ESP32, VARIANT_ESP32S3]),
 )
 
