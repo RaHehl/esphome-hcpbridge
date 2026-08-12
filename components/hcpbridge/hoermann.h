@@ -76,9 +76,9 @@ public:
     bool lightOn = false;
     bool relayOn = false;
     State state = CLOSED;
-    bool changed = false;
+    std::atomic<bool> changed{false};
     float gotoPosition = 0.0f;
-    bool valid = false;
+    std::atomic<bool> valid{false};
     // Empty until the drive has answered the matching request.
     std::string serialNumber;
     std::string firmwareVersion;
@@ -133,6 +133,10 @@ static_assert(2 + SERIAL_FIRST_REGS <= REG_CMD_COUNT, "serial payload exceeds th
 static_assert(2 + IDENT_FIRMWARE_LEN / 2 <= REG_CMD_COUNT, "firmware payload exceeds the command block");
 #define IDENT_RETRY_MS 30000
 #define IDENT_MAX_ATTEMPTS 3
+// The drive polls several times a second. Nothing at all for this long means the
+// link is gone, not that the drive has nothing to say.
+#define BUS_SILENCE_MS 20000
+
 // Answer codes we put in the low byte of the second answer register.
 #define RESP_STATUS 0x01
 #define RESP_REQUEST 0x22
@@ -170,6 +174,9 @@ public:
 
     /** Ask the drive for its serial number, then its firmware version. */
     void requestDriveIdentity();
+
+    /** Drops the connected state once the drive has gone quiet for too long. */
+    void checkBusSilence();
 
     /**
      * Moves a finished identity answer into the state. Runs in the main task:
@@ -237,6 +244,8 @@ private:
     uint8_t serialBuf[IDENT_SERIAL_LEN] = {0};
     bool serialFirstHalfSeen = false;
 
+    // Written by the bus task on every frame, read by the main task.
+    std::atomic<uint32_t> lastFrameOn{0};
 
     void copyRegsToBytes(uint8_t firstReg, uint8_t regCount, uint8_t *out);
     void onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count);

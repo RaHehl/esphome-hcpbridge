@@ -211,6 +211,11 @@ static inline void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1]
  */
 size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *resp)
 {
+  // Anything addressed to us counts as a sign of life, whatever we make of it.
+  // millis() can be 0 for the first millisecond, which would read as "never".
+  const uint32_t now = esphome::millis();
+  this->lastFrameOn.store(now == 0 ? 1 : now);
+
   const uint8_t fc = req[1];
 
   // The replaced library computed fn + 0x80, not fn | 0x80, which overflows
@@ -609,6 +614,14 @@ void HoermannGarageEngine::publishIdentity()
     this->state->setFirmwareVersion(this->identFirmware);
 }
 
+void HoermannGarageEngine::checkBusSilence()
+{
+  const uint32_t last = this->lastFrameOn.load();
+  if (last == 0)
+    return;  // nothing ever arrived, the initial state already says so
+  if ((esphome::millis() - last) > BUS_SILENCE_MS)
+    this->state->setValid(false);
+}
 
 void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count)
 {
@@ -770,7 +783,9 @@ void HoermannState::setRelayOn(bool relayOn)
 }
 void HoermannState::clearChanged()
 {
-  this->changed = false;
+  // Exchange, not assign: a change raised by the bus task between the test and
+  // this line would otherwise be dropped.
+  this->changed.exchange(false);
 }
 static bool isMoving(HoermannState::State s)
 {
@@ -792,7 +807,11 @@ void HoermannState::setState(State state)
 }
 void HoermannState::setValid(bool isValid)
 {
-  this->valid = isValid;
+  if (this->valid.exchange(isValid) == isValid)
+    return;
+  // Without this the connection sensor would only ever learn of the first
+  // frame, never of the silence afterwards.
+  this->changed = true;
 }
 
 void HoermannState::setSerialNumber(const std::string &serialNumber)
