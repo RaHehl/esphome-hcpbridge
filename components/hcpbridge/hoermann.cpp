@@ -121,12 +121,47 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
   if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x02 && a1 == REG_RESP_BASE && c1 == 0x08)
   {
     this->regResp[0] = 0x0000;
-    this->regResp[1] = 0x0001;
-    setCommandValuesToRead();
+    this->regResp[1] = RESP_STATUS;
     this->regResp[4] = 0x0000;
     this->regResp[5] = 0x0000;
     this->regResp[6] = 0x0000;
     this->regResp[7] = 0x0000;
+
+    setCommandValuesToRead();
+
+    // The first answered poll means the drive is talking to us, so this is the
+    // point to find out who it is.
+    if (!this->identityStarted)
+    {
+      this->identityStarted = true;
+      this->requestDriveIdentity();
+    }
+    // A request travels in the same registers a command would, so it has to
+    // wait until nothing is being pressed.
+    if (this->identityWanted != 0 && this->regResp[2] == 0x0000 && this->regResp[3] == 0x0000)
+    {
+      const uint32_t now = esphome::millis();
+      const bool firstTry = !this->identityAsked;
+      // Subtract, never add: adding overflows when millis() wraps.
+      if (firstTry || (now - this->identityAskedOn) > IDENT_RETRY_MS)
+      {
+        if (this->identityAttempts >= IDENT_MAX_ATTEMPTS)
+        {
+          ESP_LOGW(TAG_HCI, "drive did not answer identity request %x",
+                   this->identityWanted);
+          this->identityWanted = 0;
+        }
+        else
+        {
+          this->identityAttempts++;
+          this->identityAskedOn = now;
+          this->identityAsked = true;
+          this->regResp[1] = RESP_REQUEST;
+          this->regResp[2] = (uint16_t)(this->identityWanted << 8);
+          this->regResp[3] = 0x0000;
+        }
+      }
+    }
   }
   else if (fc == 0x17 && a2 == REG_CMD_BASE && c2 == 0x02 && a1 == REG_RESP_BASE && c1 == 0x02)
   {
@@ -142,6 +177,15 @@ void HoermannGarageEngine::onRequestHook(uint8_t fc, uint16_t a1, uint16_t c1, u
     this->regResp[2] = 0x0430;
     this->regResp[3] = 0x10ff;
     this->regResp[4] = 0xa845;
+  }
+  else if (fc == 0x17 && a2 == REG_CMD_BASE && c2 > 0x03 && a1 == REG_RESP_BASE)
+  {
+    // The drive is handing us a payload rather than asking for anything. Clear
+    // the whole answer block, not just the header: this is still a read/write
+    // frame, so whatever is left standing is read straight back, and stale
+    // command bits would look like a key press.
+    for (uint8_t i = 0; i < REG_RESP_COUNT; i++)
+      this->regResp[i] = 0x0000;
   }
   else if (fc == 0x10 && a1 == REG_BCAST_BASE)
   {
@@ -221,6 +265,7 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
         write_ok = false;
     if (!write_ok)
       return except(EX_SLAVE_FAILURE);
+    this->onWriteBlockComplete(writeAddr, writeCnt);
 
     // readWords without MODBUS_STRICT_REG: only the first register must exist.
     if (!this->regExists(readAddr))
@@ -500,6 +545,131 @@ void HoermannGarageEngine::onCounterWrite(uint16_t val)
   this->regResp[1] |= command;
 }
 
+void HoermannGarageEngine::requestDriveIdentity()
+{
+  this->armIdentityRequest(IDENT_REQ_SERIAL);
+}
+
+void HoermannGarageEngine::armIdentityRequest(uint8_t request)
+{
+  this->identityWanted = request;
+  this->identityAttempts = 0;
+  this->identityAskedOn = 0;
+  this->identityAsked = false;
+  this->serialFirstHalfSeen = false;
+}
+
+// Registers hold two payload bytes each, high byte first.
+void HoermannGarageEngine::copyRegsToBytes(uint8_t firstReg, uint8_t regCount, uint8_t *out)
+{
+  for (uint8_t i = 0; i < regCount; i++)
+  {
+    const uint16_t v = this->regCmd[firstReg + i];
+    out[2 * i] = (uint8_t)(v >> 8);
+    out[2 * i + 1] = (uint8_t)(v & 0x00FF);
+  }
+}
+
+// Trailing padding varies, and anything unprintable would only confuse a text
+// sensor, so cut at the first byte that is neither.
+static void identityToText(const uint8_t *data, size_t len, char *out, size_t outSize)
+{
+  size_t at = 0;
+  for (size_t i = 0; i < len && at + 1 < outSize; i++)
+  {
+    if (data[i] < 0x20 || data[i] > 0x7E)
+      break;
+    out[at++] = (char)data[i];
+  }
+  while (at > 0 && out[at - 1] == ' ')
+    at--;
+  out[at] = '\0';
+}
+
+void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
+{
+  if (addr != REG_CMD_BASE || count < 2)
+    return;
+  // Low byte of the first register is what the drive wants from us, high byte
+  // its running counter. Only the payload transfer is of interest here.
+  const uint8_t command = (uint8_t)(this->regCmd[0] & 0x00FF);
+  if (command != 0x04)
+    return;
+  const uint8_t counterByte = (uint8_t)(this->regCmd[0] >> 8);
+  const uint8_t subCode = (uint8_t)(this->regCmd[1] >> 8);
+
+  this->onIdentityData(counterByte, subCode, count);
+}
+
+void HoermannGarageEngine::publishIdentity()
+{
+  if (this->identSerialReady.exchange(false))
+    this->state->setSerialNumber(this->identSerial);
+  if (this->identFirmwareReady.exchange(false))
+    this->state->setFirmwareVersion(this->identFirmware);
+}
+
+
+void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count)
+{
+  // The payload starts one register behind the sub code.
+  const uint8_t firstPayloadReg = 2;
+  const uint16_t payloadRegs = count > firstPayloadReg ? count - firstPayloadReg : 0;
+  bool kept = false;
+
+  if (subCode == IDENT_SUB_FIRMWARE && payloadRegs >= IDENT_FIRMWARE_LEN / 2)
+  {
+    uint8_t buf[IDENT_FIRMWARE_LEN];
+    this->copyRegsToBytes(firstPayloadReg, IDENT_FIRMWARE_LEN / 2, buf);
+    identityToText(buf, sizeof(buf), this->identFirmware, sizeof(this->identFirmware));
+    this->identFirmwareReady.store(true);
+    this->identityWanted = 0;
+    ESP_LOGI(TAG_HCI, "drive firmware version %s", this->identFirmware);
+    kept = true;
+  }
+  else if (subCode == IDENT_SUB_SERIAL)
+  {
+    // Split over two writes, the top bit of the counter byte marks the first.
+    // The halves are of different length, so each is checked against its own,
+    // otherwise a short frame would be padded out with whatever the registers
+    // happened to hold from an earlier one.
+    const bool firstHalf = (counterByte & 0x80) != 0;
+    if (firstHalf && payloadRegs >= SERIAL_FIRST_REGS)
+    {
+      this->copyRegsToBytes(firstPayloadReg, SERIAL_FIRST_REGS, this->serialBuf);
+      this->serialFirstHalfSeen = true;
+      // Half an answer is still progress, so do not let the retry count run
+      // out while the drive is in the middle of handing the payload over.
+      this->identityAttempts = 0;
+      this->identityAskedOn = esphome::millis();
+      this->identityAsked = true;
+      kept = true;
+    }
+    else if (!firstHalf && this->serialFirstHalfSeen && payloadRegs >= SERIAL_SECOND_REGS)
+    {
+      this->copyRegsToBytes(firstPayloadReg, SERIAL_SECOND_REGS,
+                            this->serialBuf + 2 * SERIAL_FIRST_REGS);
+      this->serialFirstHalfSeen = false;
+      identityToText(this->serialBuf, IDENT_SERIAL_LEN, this->identSerial, sizeof(this->identSerial));
+      this->identSerialReady.store(true);
+      ESP_LOGI(TAG_HCI, "drive serial number received");
+      // Identity is only complete with the firmware version, so go straight on.
+      this->armIdentityRequest(IDENT_REQ_FIRMWARE);
+      kept = true;
+    }
+  }
+
+  // Confirm only what was kept. Acknowledging a chunk that was thrown away
+  // tells the drive it need not send it again, and the last chunk of a split
+  // answer needs confirming just as much as the first.
+  if (!kept)
+    return;
+  // Only the lower seven bits are the drive's running counter, the top bit
+  // marks which half of a split payload this was and must not be echoed.
+  this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
+  this->regResp[1] = (uint16_t)(0x0400 | RESP_ACK);
+}
+
 /**
  * Helper to set next Command and *not* skip Current Command before end was sent
  */
@@ -623,4 +793,20 @@ void HoermannState::setState(State state)
 void HoermannState::setValid(bool isValid)
 {
   this->valid = isValid;
+}
+
+void HoermannState::setSerialNumber(const std::string &serialNumber)
+{
+  if (this->serialNumber == serialNumber)
+    return;
+  this->serialNumber = serialNumber;
+  this->changed = true;
+}
+
+void HoermannState::setFirmwareVersion(const std::string &firmwareVersion)
+{
+  if (this->firmwareVersion == firmwareVersion)
+    return;
+  this->firmwareVersion = firmwareVersion;
+  this->changed = true;
 }

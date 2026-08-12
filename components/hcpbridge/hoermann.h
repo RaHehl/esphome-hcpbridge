@@ -4,6 +4,7 @@
 #define HOERMANN_H_
 #include <atomic>
 #include <cstdint>
+#include <string>
 
 #include "modbus_rtu.h"
 
@@ -78,6 +79,9 @@ public:
     bool changed = false;
     float gotoPosition = 0.0f;
     bool valid = false;
+    // Empty until the drive has answered the matching request.
+    std::string serialNumber;
+    std::string firmwareVersion;
 
     void setTargetPosition(float targetPosition);
     void setGotoPosition(float setPosition);
@@ -87,13 +91,18 @@ public:
     void clearChanged();
     void setState(State state);
     void setValid(bool isValid);
+    void setSerialNumber(const std::string &serialNumber);
+    void setFirmwareVersion(const std::string &firmwareVersion);
 
 };
 
 // Hoermann bus register blocks: the drive writes commands to 0x9C41 and its
 // state to 0x9D31, and reads our answer from 0x9CB9.
 #define REG_CMD_BASE 0x9C41
-#define REG_CMD_COUNT 3
+// Nine, not three: normal traffic writes two or three registers here, but the
+// drive answers an identity request by writing its payload into the same block,
+// up to 0x9C49.
+#define REG_CMD_COUNT 9
 #define REG_BCAST_BASE 0x9D31
 #define REG_BCAST_COUNT 9
 #define REG_RESP_BASE 0x9CB9
@@ -107,6 +116,27 @@ public:
 #define EX_ILLEGAL_ADDRESS 0x02
 #define EX_ILLEGAL_VALUE 0x03
 #define EX_SLAVE_FAILURE 0x04
+
+// Identity exchange: which value rides along with a poll, what the drive sends
+// back, and how long its answer is.
+#define IDENT_REQ_SERIAL 0x05
+#define IDENT_REQ_FIRMWARE 0x06
+#define IDENT_SUB_SERIAL 0x0C
+#define IDENT_SUB_FIRMWARE 0x0D
+// Fourteen bytes then twelve, seven registers then six.
+#define SERIAL_FIRST_REGS 7
+#define SERIAL_SECOND_REGS 6
+#define IDENT_SERIAL_LEN ((SERIAL_FIRST_REGS + SERIAL_SECOND_REGS) * 2)
+#define IDENT_FIRMWARE_LEN 12
+// A payload that outgrew the block would read past it instead of failing here.
+static_assert(2 + SERIAL_FIRST_REGS <= REG_CMD_COUNT, "serial payload exceeds the command block");
+static_assert(2 + IDENT_FIRMWARE_LEN / 2 <= REG_CMD_COUNT, "firmware payload exceeds the command block");
+#define IDENT_RETRY_MS 30000
+#define IDENT_MAX_ATTEMPTS 3
+// Answer codes we put in the low byte of the second answer register.
+#define RESP_STATUS 0x01
+#define RESP_REQUEST 0x22
+#define RESP_ACK 0xFD
 
 class HoermannGarageEngine
 {
@@ -131,6 +161,22 @@ public:
      * Write on 0x9C41 , byte1: counter, byte2: command
      */
     void onCounterWrite(uint16_t val);
+
+    /**
+     * Runs once all registers of a write have landed, so a payload spread over
+     * several registers can be read as a whole.
+     */
+    void onWriteBlockComplete(uint16_t addr, uint16_t count);
+
+    /** Ask the drive for its serial number, then its firmware version. */
+    void requestDriveIdentity();
+
+    /**
+     * Moves a finished identity answer into the state. Runs in the main task:
+     * the bus task only ever fills a plain buffer, so the std::string that the
+     * sensors read is never written from two places at once.
+     */
+    void publishIdentity();
 
     // One register map across all three blocks, as the replaced library had.
     // Every function code goes through it, so callbacks fire no matter which
@@ -171,5 +217,29 @@ private:
     std::atomic<const HoermannCommand *> nextCommand{nullptr};  // shared with the bus task
     // uint32_t, not unsigned long: must wrap exactly like millis() does.
     uint32_t commandWrittenOn = 0;
+
+    // Identity exchange. The drive only ever answers a request that rode along
+    // with a poll, and it takes the request out of the answer slot again, so a
+    // request that goes unanswered has to be repeated.
+    uint8_t identityWanted = 0;      // 0 = nothing, else IDENT_REQ_*
+    uint8_t identityAttempts = 0;
+    uint32_t identityAskedOn = 0;
+    // A separate flag, not identityAskedOn == 0: millis() really is 0 for the
+    // first millisecond and wraps back through it every 49.7 days.
+    bool identityAsked = false;
+    bool identityStarted = false;
+
+    // Handed from the bus task to the main task: buffer first, flag second.
+    char identSerial[IDENT_SERIAL_LEN + 1] = {0};
+    char identFirmware[IDENT_FIRMWARE_LEN + 1] = {0};
+    std::atomic<bool> identSerialReady{false};
+    std::atomic<bool> identFirmwareReady{false};
+    uint8_t serialBuf[IDENT_SERIAL_LEN] = {0};
+    bool serialFirstHalfSeen = false;
+
+
+    void copyRegsToBytes(uint8_t firstReg, uint8_t regCount, uint8_t *out);
+    void onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count);
+    void armIdentityRequest(uint8_t request);
 };
 #endif
