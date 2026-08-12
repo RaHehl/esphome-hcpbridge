@@ -1,0 +1,12 @@
+# Everything the harness generates. Only sources belong in the repository.
+*.o
+*.txt
+*.inc
+mbesp/
+old_bin*
+new_bin*
+crc_test
+old/hoermann.h
+old/orig_hoermann.cpp
+new/hoermann.*
+new/modbus_rtu.*

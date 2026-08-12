@@ -4,6 +4,9 @@ substitutions:
   friendly_name: "Garage Door"
   connection_state: "${name} Connected"
   relay_name: "${friendly_name} Relay state"
+  fault_name: "${friendly_name} Fault"
+  serial_name: "${friendly_name} Serial number"
+  firmware_name: "${friendly_name} Firmware version"
   light: "${friendly_name} Light"
   btn_vent: "${friendly_name} Vent" 
   btn_half: "${friendly_name} Half" 
@@ -16,10 +19,6 @@ substitutions:
 esphome:
   name: "${name}"
   friendly_name: "${friendly_name}"
-  libraries:
-    - emelianov/modbus-esp8266
-  platformio_options:
-    board_build.f_cpu: 240000000L
 
 external_components:
     source: github://14yannick/esphome-hcpbridge
@@ -27,8 +26,9 @@ external_components:
 
 esp32:
   board: adafruit_feather_esp32s3 #set your board
+  cpu_frequency: 240MHZ
   framework:
-    type: arduino
+    type: esp-idf
 
 hcpbridge:
   id: hcpbridge_id
@@ -52,6 +52,9 @@ binary_sensor:
       id: sensor_relay
       #on_state:
       #create your automation based on Garage Door Relay state
+    actuator_error:
+      name: "${fault_name}"
+      id: sensor_actuator_error
 
 output:
   - platform: hcpbridge
@@ -79,6 +82,16 @@ text_sensor:
   - platform: hcpbridge
     id: sensor_templ_state
     name: "${sen_txt}"
+  - platform: hcpbridge
+    type: serial_number
+    id: sensor_drive_serial
+    name: "${serial_name}"
+    entity_category: diagnostic
+  - platform: hcpbridge
+    type: firmware_version
+    id: sensor_drive_firmware
+    name: "${firmware_name}"
+    entity_category: diagnostic
 #    filters:
 #      - substitute:
 #        - "Opening -> your text"
@@ -107,6 +120,10 @@ sensor:
   - platform: hcpbridge
     id: sensor_position
     name: ${sen_pos}
+  - platform: hcpbridge
+    type: target_position
+    id: sensor_target_position
+    name: "${friendly_name} Target position"
 
 api:
   encryption:
@@ -139,7 +156,17 @@ wifi:
 # Enable logging
 logger:
   level: WARN
+  # The console is off on purpose: this component logs from its own task, and
+  # at a low baud rate that output sits in front of an answer the drive is
+  # waiting for. The network log is unaffected.
+  baud_rate: 0
 
 # Example configuration entry
 ota:
   - platform: esphome
+    on_begin:
+      then:
+        # Tell the drive before the image is written, not after: writing flash
+        # stops the serial driver, so the bus is unanswered for the whole
+        # transfer and a shutdown handler would be far too late.
+        - lambda: 'id(hcpbridge_id).announce_pause();'

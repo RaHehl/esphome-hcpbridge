@@ -16,3 +16,16 @@ jobs:
         uses: esphome/build-action@v6
         with:
           yaml-file: .github/example_build_hcpbridge.yaml
+
+  differential:
+    name: Differential test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+        with:
+          # The harness compiles the implementation this replaces, taken from a
+          # commit in this repo's history. A shallow clone does not have it.
+          fetch-depth: 0
+      - name: Compare against the implementation this replaced
+        run: sh test/modbus-diff/run.sh
