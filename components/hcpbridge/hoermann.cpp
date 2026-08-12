@@ -717,6 +717,19 @@ static void identityToText(const uint8_t *data, size_t len, char *out, size_t ou
   out[at] = '\0';
 }
 
+// Every answer to a data transfer is one of two codes. Staying silent leaves
+// the answer code at zero, which the protocol does not define, and a drive
+// waiting on a defined reply has nothing to go on.
+void HoermannGarageEngine::answerTransfer(uint8_t counterByte, uint8_t code)
+{
+  for (uint8_t i = 2; i < REG_RESP_COUNT; i++)
+    this->regResp[i] = 0x0000;
+  // Only the lower seven bits are the drive's running counter, the top bit
+  // marks which half of a split payload this was and must not be echoed.
+  this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
+  this->regResp[1] = (uint16_t)(0x0400 | code);
+}
+
 void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
 {
   if (addr != REG_CMD_BASE || count < 2)
@@ -731,21 +744,32 @@ void HoermannGarageEngine::onWriteBlockComplete(uint16_t addr, uint16_t count)
 
   if (subCode == IDENT_SUB_PAUSE_ACK)
   {
-    if (count < 3)
-      return;  // the address spans a register this frame did not carry
     // The drive names the address it is pausing. It sits astride two
     // registers: low byte of the sub code register, high byte of the next.
-    const uint16_t named = (uint16_t)(((this->regCmd[1] & 0x00FF) << 8) | (this->regCmd[2] >> 8));
-    if (named == SLAVE_ID)
-      this->pauseConfirmed.store(true);
-    for (uint8_t i = 2; i < REG_RESP_COUNT; i++)
-      this->regResp[i] = 0x0000;
-    this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
-    this->regResp[1] = (uint16_t)(0x0400 | RESP_ACK);
+    if (count >= 3)
+    {
+      const uint16_t named =
+          (uint16_t)(((this->regCmd[1] & 0x00FF) << 8) | (this->regCmd[2] >> 8));
+      if (named == SLAVE_ID)
+        this->pauseConfirmed.store(true);
+    }
+    // Confirmed either way: the drive asked us something we understand, and
+    // leaving it unanswered is worse than answering an address that was not
+    // ours to begin with.
+    this->answerTransfer(counterByte, RESP_ACK);
     return;
   }
 
-  this->onIdentityData(counterByte, subCode, count);
+  if (subCode == IDENT_SUB_SERIAL || subCode == IDENT_SUB_FIRMWARE)
+  {
+    this->onIdentityData(counterByte, subCode, count);
+    this->answerTransfer(counterByte, RESP_ACK);
+    return;
+  }
+
+  // Something we do not know. Say so rather than leaving an undefined code.
+  ESP_LOGW(TAG_HCI, "unknown transfer sub code %02x", subCode);
+  this->answerTransfer(counterByte, RESP_NAK);
 }
 
 bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
@@ -822,7 +846,7 @@ void HoermannGarageEngine::checkBusSilence()
     this->state->setValid(false);
 }
 
-void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count)
+bool HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count)
 {
   // The payload starts one register behind the sub code.
   const uint8_t firstPayloadReg = 2;
@@ -871,15 +895,7 @@ void HoermannGarageEngine::onIdentityData(uint8_t counterByte, uint8_t subCode, 
     }
   }
 
-  // Confirm only what was kept. Acknowledging a chunk that was thrown away
-  // tells the drive it need not send it again, and the last chunk of a split
-  // answer needs confirming just as much as the first.
-  if (!kept)
-    return;
-  // Only the lower seven bits are the drive's running counter, the top bit
-  // marks which half of a split payload this was and must not be echoed.
-  this->regResp[0] = (uint16_t)((counterByte & 0x7F) << 8);
-  this->regResp[1] = (uint16_t)(0x0400 | RESP_ACK);
+  return kept;
 }
 
 /**

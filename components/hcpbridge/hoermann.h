@@ -159,6 +159,7 @@ static_assert(2 + IDENT_FIRMWARE_LEN / 2 <= REG_CMD_COUNT, "firmware payload exc
 #define RESP_REQUEST 0x22
 #define RESP_PAUSE 0x29
 #define RESP_ACK 0xFD
+#define RESP_NAK 0xFE
 
 class HoermannGarageEngine
 {
@@ -308,7 +309,8 @@ private:
     std::atomic<uint32_t> lastFrameOn{0};
 
     void copyRegsToBytes(uint8_t firstReg, uint8_t regCount, uint8_t *out);
-    void onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count);
+    bool onIdentityData(uint8_t counterByte, uint8_t subCode, uint16_t count);
+    void answerTransfer(uint8_t counterByte, uint8_t code);
     void armIdentityRequest(uint8_t request);
 };
 #endif
