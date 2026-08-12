@@ -311,11 +311,23 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     const uint8_t byteCnt = req[10];
     const uint8_t *wdata = req + 11;
 
-    // Before the hook, because whether the previous answer arrived decides
-    // whether a command has to go back into the queue, and the hook is where
-    // the queue is read. The high byte of the first written register is the
-    // counter, the low byte the command.
-    const bool countedFrame = writeAddr == REG_CMD_BASE && writeCnt >= 1 && len >= 13;
+    // The two blocks sit at one address each and nowhere else. Letting a frame
+    // through that names a different one would shift the whole payload by a
+    // register: the counter would be read as a command, and a command as a
+    // position. Checked before anything is stored, and before the counter is
+    // looked at, so a frame like that cannot reach any state at all.
+    if (readAddr != REG_RESP_BASE || writeAddr != REG_CMD_BASE)
+    {
+      ESP_LOGW(TAG_HCI, "frame names read %04x write %04x, expected %04x and %04x", readAddr,
+               writeAddr, REG_RESP_BASE, REG_CMD_BASE);
+      return except(EX_ILLEGAL_ADDRESS);
+    }
+
+    // Whether the previous answer arrived decides whether a command has to go
+    // back into the queue, and the hook is where the queue is read, so this
+    // comes first. The high byte of the first written register is the counter,
+    // the low byte the command.
+    const bool countedFrame = writeCnt >= 1 && len >= 13;
     if (countedFrame)
       this->syncCounter(wdata[0]);
 
@@ -372,6 +384,16 @@ size_t HoermannGarageEngine::onFrame(const uint8_t *req, size_t len, uint8_t *re
     const uint16_t cnt = rd16(req + 4);
     const uint8_t byteCnt = req[6];
     const uint8_t *wdata = req + 7;
+
+    // Same reasoning as for the read/write frame: the drive state block has one
+    // address. A frame naming another one would land the door state where the
+    // position is read from. Broadcasts are never answered anyway, so this only
+    // stops it from being stored.
+    if (addr != REG_BCAST_BASE)
+    {
+      ESP_LOGW(TAG_HCI, "broadcast names %04x, expected %04x", addr, REG_BCAST_BASE);
+      return except(EX_ILLEGAL_ADDRESS);
+    }
 
     this->onRequestHook(fc, addr, cnt, 0, 0);
 
