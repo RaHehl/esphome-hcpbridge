@@ -10,7 +10,11 @@ set -e
 cd "$(dirname "$0")"
 PRE=${PRE:-a91b75c}    # last upstream commit that still used the Arduino library
 rm -f ./*.o          # stale objects with changed struct layouts would silently mislead
-[ -d mbesp ] || git clone -q --depth 1 https://github.com/emelianov/modbus-esp8266.git mbesp
+# Pinned: taking whatever HEAD happens to be means someone else's commit can
+# turn this repo red.
+MBESP_REF=${MBESP_REF:-v4.1.0}
+[ -d mbesp ] || git clone -q --branch "$MBESP_REF" --depth 1 \
+  https://github.com/emelianov/modbus-esp8266.git mbesp
 git -C ../.. show "$PRE:components/hcpbridge/hoermann.h"   > old/hoermann.h
 git -C ../.. show "$PRE:components/hcpbridge/hoermann.cpp" > old/orig_hoermann.cpp
 cp ../../components/hcpbridge/hoermann.h ../../components/hcpbridge/hoermann.cpp \

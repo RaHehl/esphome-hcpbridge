@@ -136,7 +136,11 @@ void ModbusRtuServer::poll(uint32_t timeout_ms) {
                  (static_cast<uint16_t>(this->rx_buf_[n - 1]) << 8);
   uint16_t want = crc16(this->rx_buf_, n - 2);
   if (got != want) {
-    ESP_LOGW(TAG, "CRC mismatch (got %04X want %04X, %u bytes)", got, want, static_cast<unsigned>(n));
+    // A half-terminated line produces these at frame rate, and this is the
+    // task the drive is waiting on.
+    if (rtu_warn_due())
+      ESP_LOGW(TAG, "CRC mismatch (got %04X want %04X, %u bytes)", got, want,
+               static_cast<unsigned>(n));
     return;
   }
 

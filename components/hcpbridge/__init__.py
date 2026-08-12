@@ -1,6 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import pins
+from esphome.components.esp32 import VARIANT_ESP32, VARIANT_ESP32S3, only_on_variant
 from esphome.const import (
     CONF_ID,
     CONF_RX_PIN,
@@ -14,9 +15,10 @@ HCPBridge = hcpbridge_ns.class_("HCPBridge", cg.PollingComponent)
 
 CONF_HCPBridge_ID = "hcpbridge_id"
 
-# The sources use the ESP-IDF UART driver and FreeRTOS directly, so anything
-# else fails deep inside the compiler instead of here, where the cause is
-# visible.
+# The sources use the ESP-IDF UART driver and FreeRTOS directly, and UART2,
+# which only the variants below have. Without this the config validates and
+# then fails deep inside the compiler, which is the failure this is here to
+# prevent.
 CONFIG_SCHEMA = cv.All(
     cv.Schema({
         cv.GenerateID(): cv.declare_id(HCPBridge),
@@ -26,6 +28,7 @@ CONFIG_SCHEMA = cv.All(
     }).extend(cv.polling_component_schema("500ms")),
     cv.only_on_esp32,
     cv.only_with_esp_idf,
+    only_on_variant(supported=[VARIANT_ESP32, VARIANT_ESP32S3]),
 )
 
 async def to_code(config):
