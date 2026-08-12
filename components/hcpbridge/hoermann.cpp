@@ -453,10 +453,72 @@ void HoermannGarageEngine::setCommandValuesToRead()
       // Reset Variables
       commandWrittenOn = 0;
       this->nextCommand.store(nullptr);
+      // Start watching for the effect, unless this was itself a repeat.
+      if (this->awaitedCommand != cmd)
+      {
+        this->awaitedCommand = cmd;
+        this->awaitedSince = esphome::millis();
+        this->awaitedRepeats = 0;
+        this->stateWhenSent = this->state->state;
+        this->lightWhenSent = this->state->lightOn;
+      }
     }
   }
   this->regResp[2] = regPlug2Value;
   this->regResp[3] = regPlug3Value;
+}
+
+// Did the door do what it was told? A direction that is already reached counts,
+// otherwise pressing "open" on an open door would look like a failure.
+bool HoermannGarageEngine::commandTookEffect() const
+{
+  const HoermannCommand *cmd = this->awaitedCommand;
+  const HoermannState::State now = this->state->state;
+  if (cmd == &HoermannCommand::STARTOPENDOOR)
+    return now == HoermannState::OPENING || now == HoermannState::OPEN;
+  if (cmd == &HoermannCommand::STARTCLOSEDOOR)
+    return now == HoermannState::CLOSING || now == HoermannState::CLOSED;
+  if (cmd == &HoermannCommand::STARTOPENDOORHALF)
+    return now == HoermannState::MOVE_HALF || now == HoermannState::HALFOPEN;
+  if (cmd == &HoermannCommand::STARTVENTPOSITION)
+    return now == HoermannState::MOVE_VENTING || now == HoermannState::VENT;
+  if (cmd == &HoermannCommand::STARTTOGGLELAMP)
+    return this->state->lightOn != this->lightWhenSent;
+  // An impulse has no destination of its own; any change is the answer.
+  return now != this->stateWhenSent;
+}
+
+void HoermannGarageEngine::checkCommandEffect()
+{
+  if (this->awaitedCommand == nullptr)
+    return;
+  if (this->commandTookEffect())
+  {
+    this->awaitedCommand = nullptr;
+    return;
+  }
+  // A command the caller queued in the meantime takes over; repeating an old
+  // one on top of it would be a second press nobody asked for.
+  if (this->nextCommand.load() != nullptr)
+  {
+    this->awaitedCommand = nullptr;
+    return;
+  }
+  // Subtract, never add: adding overflows when millis() wraps.
+  const uint32_t waited = esphome::millis() - this->awaitedSince;
+  if (waited > CMD_GIVEUP_MS)
+  {
+    ESP_LOGW(TAG_HCI, "drive did not act on command %x",
+             this->awaitedCommand->commandRegPlus2Value);
+    this->awaitedCommand = nullptr;
+    return;
+  }
+  if (waited > CMD_CONFIRM_MS && this->awaitedRepeats == 0)
+  {
+    this->awaitedRepeats = 1;
+    ESP_LOGI(TAG_HCI, "repeating command %x", this->awaitedCommand->commandRegPlus2Value);
+    this->nextCommand.store(this->awaitedCommand);
+  }
 }
 
 void HoermannGarageEngine::onDoorPositonChanged(uint16_t oldVal, uint16_t val)

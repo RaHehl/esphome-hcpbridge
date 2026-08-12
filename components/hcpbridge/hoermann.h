@@ -11,6 +11,10 @@
 #define SLAVE_ID 2
 #define HCP_BAUD 57600
 #define SIMULATEKEYPRESSDELAYMS 100
+// A command is only done once the drive has acted on it. If nothing has changed
+// by the first mark, send it once more; give up at the second and say so.
+#define CMD_CONFIRM_MS 2000
+#define CMD_GIVEUP_MS 5000
 
 #ifdef CONFIG_IDF_TARGET_ESP32S3
 #define PIN_TXD 17
@@ -246,6 +250,17 @@ private:
     std::atomic<const HoermannCommand *> nextCommand{nullptr};  // shared with the bus task
     // uint32_t, not unsigned long: must wrap exactly like millis() does.
     uint32_t commandWrittenOn = 0;
+
+    // What was sent and what the door looked like at the time, so the effect
+    // can be recognised and the command repeated if there was none.
+    const HoermannCommand *awaitedCommand = nullptr;
+    uint32_t awaitedSince = 0;
+    uint8_t awaitedRepeats = 0;
+    HoermannState::State stateWhenSent = HoermannState::CLOSED;
+    bool lightWhenSent = false;
+
+    bool commandTookEffect() const;
+    void checkCommandEffect();
 
     // Identity exchange. The drive only ever answers a request that rode along
     // with a poll, and it takes the request out of the answer slot again, so a
