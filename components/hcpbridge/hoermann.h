@@ -126,6 +126,7 @@ public:
 #define IDENT_SERIAL_LEN 26
 #define IDENT_FIRMWARE_LEN 12
 #define IDENT_RETRY_MS 30000
+#define SHAPE_REPEAT_MS 60000
 #define IDENT_MAX_ATTEMPTS 3
 // Answer codes we put in the low byte of the second answer register.
 #define RESP_STATUS 0x01
@@ -228,6 +229,7 @@ private:
     static const uint8_t SEEN_SHAPES_MAX = 12;
     SeenShape seenShapes[SEEN_SHAPES_MAX] = {};
     uint8_t seenShapeCount = 0;
+    uint32_t seenClearedOn = 0;
     uint16_t lastReadCount = 0;
     void reportShape(uint16_t writeCount);
 

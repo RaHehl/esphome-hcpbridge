@@ -593,6 +593,20 @@ void HoermannGarageEngine::reportShape(uint16_t writeCount)
   const uint8_t wc = (uint8_t)(writeCount > 255 ? 255 : writeCount);
   const uint8_t rc = (uint8_t)(this->lastReadCount > 255 ? 255 : this->lastReadCount);
 
+  // Forget what was seen now and then. The first requests arrive milliseconds
+  // after the bus task starts, long before anything can be listening, so a
+  // report that only ever runs once is a report nobody reads.
+  const uint32_t now = esphome::millis();
+  if (this->seenShapeCount != 0 && (now - this->seenClearedOn) > SHAPE_REPEAT_MS)
+  {
+    this->seenShapeCount = 0;
+    this->seenClearedOn = now;
+  }
+  else if (this->seenShapeCount == 0)
+  {
+    this->seenClearedOn = now;
+  }
+
   for (uint8_t i = 0; i < this->seenShapeCount; i++)
     if (this->seenShapes[i].writeCount == wc && this->seenShapes[i].readCount == rc &&
         this->seenShapes[i].command == command && this->seenShapes[i].sub == sub)
