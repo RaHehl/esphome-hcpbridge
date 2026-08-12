@@ -3,8 +3,8 @@
 *.txt
 *.inc
 mbesp/
-old_bin
-new_bin
+old_bin*
+new_bin*
 crc_test
 old/hoermann.h
 old/orig_hoermann.cpp
