@@ -4,6 +4,7 @@
 
 #include "hoermann.h"
 
+#include "esphome/core/application.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
@@ -769,6 +770,7 @@ bool HoermannGarageEngine::announcePause(uint32_t timeoutMs)
   // Subtract, never add: adding overflows when millis() wraps.
   while ((esphome::millis() - started) < timeoutMs)
   {
+    esphome::App.feed_wdt();
     if (this->pauseConfirmed.load())
     {
       // Keep answering the pause while the wire drains. Going back to the
@@ -795,6 +797,7 @@ void HoermannGarageEngine::settleBeforeRestart()
   const uint32_t started = esphome::millis();
   while ((esphome::millis() - started) < PAUSE_SETTLE_MS)
   {
+    esphome::App.feed_wdt();
     const uint32_t last = this->lastFrameOn.load();
     if (last != 0 && (esphome::millis() - last) > PAUSE_QUIET_MS)
       return;
