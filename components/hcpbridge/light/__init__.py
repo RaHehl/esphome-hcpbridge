@@ -1,8 +1,9 @@
+import esphome.codegen as cg
 from esphome.components import light, output
 import esphome.config_validation as cv
-import esphome.codegen as cg
-from esphome.const import CONF_OUTPUT_ID, CONF_OUTPUT 
-from .. import hcpbridge_ns, CONF_HCPBridge_ID, HCPBridge
+from esphome.const import CONF_OUTPUT, CONF_OUTPUT_ID
+
+from .. import CONF_HCPBridge_ID, HCPBridge, hcpbridge_ns
 
 DEPENDENCIES = ["hcpbridge"]
 
@@ -20,6 +21,7 @@ CONFIG_SCHEMA = cv.All(
     .extend(light.BINARY_LIGHT_SCHEMA)
     .extend(cv.COMPONENT_SCHEMA)
 )
+
 
 async def to_code(config):
     light_output_var = cg.new_Pvariable(config[CONF_OUTPUT_ID])

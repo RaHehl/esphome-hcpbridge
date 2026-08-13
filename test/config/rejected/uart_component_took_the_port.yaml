@@ -1,0 +1,26 @@
+# expect: also claimed by a uart: component
+esphome:
+  name: rejected-case
+external_components:
+  - source:
+      type: local
+      path: "../../../components/"
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+logger:
+  baud_rate: 0
+uart:
+  - id: other_bus
+    tx_pin: 25
+    rx_pin: 26
+    baud_rate: 9600
+  - id: third_bus
+    tx_pin: 32
+    rx_pin: 33
+    baud_rate: 9600
+hcpbridge:
+  uart_num: 1
+  rx_pin: 18
+  tx_pin: 19

@@ -1,0 +1,15 @@
+# expect: uart_num 0 is the console
+esphome:
+  name: rejected-case
+external_components:
+  - source:
+      type: local
+      path: "../../../components/"
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+logger:
+  baud_rate: 0
+hcpbridge:
+  uart_num: 0

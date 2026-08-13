@@ -1,0 +1,16 @@
+# expect: carries PSRAM on WROVER modules
+esphome:
+  name: rejected-case
+external_components:
+  - source:
+      type: local
+      path: "../../../components/"
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+logger:
+  baud_rate: 0
+psram:
+hcpbridge:
+  uart_num: 2

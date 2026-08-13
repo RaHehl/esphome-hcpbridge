@@ -1,0 +1,33 @@
+# Smallest configuration that still exercises every option this component adds.
+# One per variant, because "it validates" and "it links on this chip" are
+# different claims and only the second needs a compiler.
+esphome:
+  name: hcpbridge-esp32c3
+
+external_components:
+  - source:
+      type: local
+      path: "../../components/"
+
+esp32:
+  variant: esp32c3
+  framework:
+    type: esp-idf
+
+# The console is off on purpose: this component answers from its own task, and
+# a log line at a low baud rate sits in front of an answer the drive is waiting
+# for.
+logger:
+  level: WARN
+  baud_rate: 0
+
+hcpbridge:
+  id: hcpbridge_id
+  rx_pin: 4
+  tx_pin: 5
+
+cover:
+  - platform: hcpbridge
+    name: Door
+    device_class: garage
+    id: garagedoor_cover

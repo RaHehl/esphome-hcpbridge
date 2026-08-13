@@ -4,103 +4,66 @@ namespace esphome {
 namespace hcpbridge {
 
 static const char *const TAG = "hcpbridge.switch";
-static const char *const TAG2 = "hcpbridge.switch2";
 
-// Implementation for HCPBridgeSwitchVent
-
-void HCPBridgeSwitchVent::setup() {
-    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); }, TAG);
+void HCPBridgeSwitch::setup() {
+  this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); });
 }
 
-void HCPBridgeSwitchVent::on_event_triggered() {
+void HCPBridgeSwitch::command_dropped() {
+  ESP_LOGW(TAG, "%s was not given to the drive", this->get_name().c_str());
+  // Home Assistant has already moved the toggle. Publishing the state the door
+  // is really in would be dropped as a repeat of what was last published, and
+  // the toggle would then stay wrong for as long as the door does not happen to
+  // move on its own. Telling the deduplicator it no longer knows lets the
+  // correction through.
+  this->publish_dedup_.next_unknown();
+  this->publish_state(this->parent_->engine->state()->state == this->target_state());
+}
+
+bool HCPBridgeSwitch::send_open() {
+  return this->type_ == HCPBRIDGE_SWITCH_HALF ? this->parent_->engine->halfPositionDoor(millis())
+                                              : this->parent_->engine->ventilationPositionDoor(millis());
+}
+
+void HCPBridgeSwitch::on_event_triggered() {
   if (this->parent_ == nullptr || this->parent_->engine == nullptr) {
-    ESP_LOGW(TAG, "HCPBridgeSwitchVent::update() - Engine or parent is null");
     return;
   }
-  if (!this->parent_->engine->state->valid) {
+  // Nothing has been heard from the drive, so the door's position is unknown
+  // rather than false.
+  if (!this->parent_->engine->state()->valid) {
     if (!this->status_has_warning()) {
-      ESP_LOGD(TAG, "HCPBridgeSwitchVent::update() - state is invalid");
       this->status_set_warning();
     }
     return;
   }
   if (this->status_has_warning()) {
-    ESP_LOGD(TAG, "HCPBridgeSwitchVent::update() - clearing warning");
     this->status_clear_warning();
   }
-  bool is_venting = this->parent_->engine->state->state == HoermannState::State::VENT;
 
-  if (this->previousState_ != is_venting) {
-    ESP_LOGD(TAG, "HCPBridgeSwitchVent::update() - state changed to %s", is_venting ? "VENT" : "NOT VENT");
-    this->publish_state(is_venting);
-    this->previousState_ = is_venting;
-  }
+  // Unconditional: ESPHome drops the repeats, and it publishes the first one
+  // even when it is false, which a comparison against a false-initialised
+  // member never would.
+  this->publish_state(this->parent_->engine->state()->state == this->target_state());
 }
 
-void HCPBridgeSwitchVent::write_state(bool state) {
+void HCPBridgeSwitch::write_state(bool state) {
+  const HoermannState::State now = this->parent_->engine->state()->state;
   if (state) {
-    if (this->parent_->engine->state->state != HoermannState::State::VENT) {
-      ESP_LOGD(TAG, "HCPBridgeSwitchVent::write_state() - Setting door to vent");
-      this->parent_->engine->ventilationPositionDoor();
-    } else {
-      ESP_LOGD(TAG, "HCPBridgeSwitchVent::write_state() - Door already in vent state");
+    // Already there: asking again would be a second key press.
+    if (now == this->target_state()) {
+      return;
     }
-  } else {
-    if (this->parent_->engine->state->state != HoermannState::State::CLOSED) {
-      ESP_LOGD(TAG, "HCPBridgeSwitchVent::write_state() - Closing door");
-      this->parent_->engine->closeDoor();
-    } else {
-      ESP_LOGD(TAG, "HCPBridgeSwitchVent::write_state() - Door already closed");
-    }
-  }
-}
-
-// Implementation for HCPBridgeSwitchHalf
-
-void HCPBridgeSwitchHalf::setup() {
-    this->parent_->add_on_state_callback([this]() { this->on_event_triggered(); }, TAG2);
-}
-
-void HCPBridgeSwitchHalf::on_event_triggered() {
-  if (this->parent_ == nullptr || this->parent_->engine == nullptr) {
-    ESP_LOGW(TAG, "HCPBridgeSwitchHalf::update() - Engine or parent is null");
-    return;
-  }
-  if (!this->parent_->engine->state->valid) {
-    if (!this->status_has_warning()) {
-      ESP_LOGD(TAG, "HCPBridgeSwitchHalf::update() - state is invalid");
-      this->status_set_warning();
+    if (!this->send_open()) {
+      this->command_dropped();
     }
     return;
   }
-  if (this->status_has_warning()) {
-    ESP_LOGD(TAG, "HCPBridgeSwitchHalf::update() - clearing warning");
-    this->status_clear_warning();
+  if (now == HoermannState::State::CLOSED) {
+    return;
   }
-  bool is_half_open = this->parent_->engine->state->state == HoermannState::State::HALFOPEN;
-
-  if (this->previousState_ != is_half_open) {
-    ESP_LOGD(TAG, "HCPBridgeSwitchHalf::update() - state changed to %s", is_half_open ? "HALF OPEN" : "NOT HALF OPEN");
-    this->publish_state(is_half_open);
-    this->previousState_ = is_half_open;
-  }
-}
-
-void HCPBridgeSwitchHalf::write_state(bool state) {
-  if (state) {
-    if (this->parent_->engine->state->state != HoermannState::State::HALFOPEN) {
-      ESP_LOGD(TAG, "HCPBridgeSwitchHalf::write_state() - Setting door to half open");
-      this->parent_->engine->halfPositionDoor();
-    } else {
-      ESP_LOGD(TAG, "HCPBridgeSwitchHalf::write_state() - Door already in half open state");
-    }
-  } else {
-    if (this->parent_->engine->state->state != HoermannState::State::CLOSED) {
-      ESP_LOGD(TAG, "HCPBridgeSwitchHalf::write_state() - Closing door");
-      this->parent_->engine->closeDoor();
-    } else {
-      ESP_LOGD(TAG, "HCPBridgeSwitchHalf::write_state() - Door already closed");
-    }
+  if (!this->parent_->engine->closeDoor(millis())) {
+    this->command_dropped();
   }
 }
 

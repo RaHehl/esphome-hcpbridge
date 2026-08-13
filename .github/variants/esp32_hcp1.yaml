@@ -1,0 +1,41 @@
+# The older bus, on the chip most of those drives sit next to. Built here
+# because "the code exists" and "the code links for that protocol" are
+# different claims, and no drive in reach speaks this one.
+esphome:
+  name: hcpbridge-hcp1
+
+external_components:
+  - source:
+      type: local
+      path: "../../components/"
+
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+
+logger:
+  level: WARN
+  baud_rate: 0
+
+hcpbridge:
+  id: hcpbridge_id
+  protocol: hcp1
+  rx_pin: 16
+  tx_pin: 17
+
+cover:
+  - platform: hcpbridge
+    name: Door
+    device_class: garage
+    id: garagedoor_cover
+
+binary_sensor:
+  - platform: hcpbridge
+    type: is_connected
+    name: Connected
+
+button:
+  - platform: hcpbridge
+    type: impulse
+    name: Impulse

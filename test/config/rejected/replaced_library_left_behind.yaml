@@ -1,0 +1,20 @@
+# expect: cannot be built under esp-idf
+# Without this rule the build fetches the whole toolchain and compiles a
+# thousand objects before failing on a missing Arduino.h.
+esphome:
+  name: rejected-case
+  libraries:
+    - emelianov/modbus-esp8266
+external_components:
+  - source:
+      type: local
+      path: "../../../components/"
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+logger:
+  baud_rate: 0
+hcpbridge:
+  rx_pin: 16
+  tx_pin: 17

@@ -1,0 +1,20 @@
+# expect: does not carry the position
+esphome:
+  name: rejected-case
+external_components:
+  - source:
+      type: local
+      path: "../../../components/"
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+logger:
+  baud_rate: 0
+hcpbridge:
+  id: door
+  protocol: hcp1
+sensor:
+  - platform: hcpbridge
+    type: position
+    name: Position

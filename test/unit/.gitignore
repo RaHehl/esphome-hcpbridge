@@ -1,0 +1,6 @@
+event_ring_test
+event_ring_test_tsan
+*.o
+*.dSYM/
+hcp1_frame_test
+hcp1_codec_test
