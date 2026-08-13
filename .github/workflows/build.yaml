@@ -5,10 +5,56 @@ on:
   push:
   pull_request:
 
+# One known-good ESPHome for everything that can block a merge. Without it a
+# release upstream turns this repository red on a day nobody touched it, and the
+# five build legs below turn one such breakage into five.
+env:
+  ESPHOME_VERSION: "2026.7.4"
+
 jobs:
   build:
-    name: Build
+    name: Build ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The full example: every entity and option this component offers.
+          - name: esp32s3-full
+            yaml: .github/example_build_hcpbridge.yaml
+          # One minimal build per supported chip family. Validation alone cannot
+          # show that the sources link on a single-core RISC-V target.
+          - name: esp32
+            yaml: .github/variants/esp32.yaml
+          - name: esp32s2
+            yaml: .github/variants/esp32s2.yaml
+          - name: esp32c3
+            yaml: .github/variants/esp32c3.yaml
+          - name: esp32c6
+            yaml: .github/variants/esp32c6.yaml
+          # The older bus. No drive in reach speaks it, so linking it is the
+          # only thing that can be checked automatically.
+          - name: esp32-hcp1
+            yaml: .github/variants/esp32_hcp1.yaml
+          # Four doors, and two of them on the other protocol: the only chip
+          # with enough full UARTs to show that one image serves both.
+          - name: esp32p4-four-doors
+            yaml: .github/variants/esp32p4.yaml
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+      - name: Compile
+        uses: esphome/build-action@v6
+        with:
+          yaml-file: ${{ matrix.yaml }}
+          version: ${{ env.ESPHOME_VERSION }}
+
+  build-latest:
+    # Says early when an ESPHome release breaks this component, without holding
+    # up work that has nothing to do with it.
+    name: Build against latest ESPHome (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4.1.7
@@ -16,3 +62,82 @@ jobs:
         uses: esphome/build-action@v6
         with:
           yaml-file: .github/example_build_hcpbridge.yaml
+          version: latest
+
+  format:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+      - name: Install the formatters
+        run: pip install clang-format ruff
+      - name: C++ against .clang-format
+        run: |
+          clang-format --dry-run --Werror $(git ls-files '*.cpp' '*.h')
+      - name: Python against pyproject.toml
+        run: |
+          ruff check $(git ls-files '*.py')
+          ruff format --check $(git ls-files '*.py')
+
+  example:
+    # The configuration a user copies from. It used to fetch the component out
+    # of GitHub, so it checked whatever was published rather than this branch.
+    name: User-facing example
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+      - name: Install ESPHome
+        run: pip install "esphome==${{ env.ESPHOME_VERSION }}"
+      - name: Validate it against this tree
+        run: |
+          python -c "import base64, os; \
+            print('api_key: \"' + base64.b64encode(os.urandom(32)).decode() + '\"')" > secrets.yaml
+          grep -v '^api_key:' secrets.yaml.example >> secrets.yaml
+          esphome config example_hcpbridge.yaml
+
+  refusals:
+    # That valid configurations pass is what the build matrix shows. This is the
+    # other half: that the invalid ones are actually refused, and for the stated
+    # reason.
+    name: Refused configurations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+      - name: Check every refusal holds
+        run: sh test/config/run.sh
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+      - name: Run the pieces that stand on their own
+        run: sh test/unit/run.sh
+
+  mutation:
+    # Breaks the codec on purpose and reports which gates went red. A suite that
+    # stays green on broken code says nothing, and this is what notices.
+    name: Mutation gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+      - name: Check that the gates would fail
+        run: sh test/mutation/run.sh
+
+  simulator:
+    # The accessory played against a modelled drive. This replaced the
+    # differential test against the implementation this work supersedes, once
+    # test/mutation showed it catches everything that one did and four things
+    # besides.
+    name: Simulator
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4.1.7
+      - name: Play a drive against the accessory
+        run: sh test/sim/run.sh

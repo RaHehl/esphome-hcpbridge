@@ -5,19 +5,29 @@ namespace hcpbridge {
 
 static const char *const TAG = "hcpbridge.button";
 
-void HCPBridgeButtonVent::press_action() {
-  ESP_LOGD(TAG, "HCPBridgeButtonVent::press_action() - Triggering vent position");
-  this->parent_->engine->ventilationPositionDoor();
-}
-
-void HCPBridgeButtonHalf::press_action() {
-  ESP_LOGD(TAG, "HCPBridgeButtonHalf::press_action() - Triggering half-open position");
-  this->parent_->engine->halfPositionDoor();
-}
-
-void HCPBridgeButtonImpulse::press_action() {
-  ESP_LOGD(TAG, "HCPBridgeButtonImpulse::press_action() - Triggering impulse action");
-  this->parent_->engine->impulseDoor();
+void HCPBridgeButton::press_action() {
+  // Whichever bus was configured. Naming the concrete type here is how this
+  // file went on referring to a class that had been renamed away.
+  HcpBus *engine = this->parent_->engine;
+  bool sent;
+  const char *what;
+  switch (this->type_) {
+    case HCPBRIDGE_BUTTON_VENT:
+      what = "vent";
+      sent = engine->ventilationPositionDoor(millis());
+      break;
+    case HCPBRIDGE_BUTTON_HALF:
+      what = "half open";
+      sent = engine->halfPositionDoor(millis());
+      break;
+    default:
+      what = "impulse";
+      sent = engine->impulseDoor(millis());
+      break;
+  }
+  if (!sent) {
+    ESP_LOGW(TAG, "%s dropped, the drive has not fetched the previous command yet", what);
+  }
 }
 
 }  // namespace hcpbridge

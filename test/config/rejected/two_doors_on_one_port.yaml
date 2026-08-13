@@ -1,0 +1,20 @@
+# expect: used by more than one hcpbridge
+esphome:
+  name: rejected-case
+external_components:
+  - source:
+      type: local
+      path: "../../../components/"
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+logger:
+  baud_rate: 0
+hcpbridge:
+  - id: door_a
+    uart_num: 2
+  - id: door_b
+    uart_num: 2
+    rx_pin: 4
+    tx_pin: 5

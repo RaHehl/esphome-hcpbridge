@@ -1,0 +1,15 @@
+# expect: the one the logger writes to
+esphome:
+  name: rejected-case
+external_components:
+  - source:
+      type: local
+      path: "../../../components/"
+esp32:
+  variant: esp32
+  framework:
+    type: esp-idf
+logger:
+  hardware_uart: UART2
+hcpbridge:
+  uart_num: 2

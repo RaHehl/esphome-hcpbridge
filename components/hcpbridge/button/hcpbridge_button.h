@@ -7,31 +7,21 @@
 namespace esphome {
 namespace hcpbridge {
 
-class HCPBridgeButtonVent : public button::Button, public Component {
-  public:
-    void set_hcpbridge_parent(HCPBridge *parent) { this->parent_ = parent; }
-    void press_action() override;
-
-  protected:
-    HCPBridge *parent_;
+enum HCPBridgeButtonType {
+  HCPBRIDGE_BUTTON_IMPULSE = 0,
+  HCPBRIDGE_BUTTON_VENT,
+  HCPBRIDGE_BUTTON_HALF,
 };
 
-class HCPBridgeButtonHalf : public button::Button, public Component {
-  public:
-    void set_hcpbridge_parent(HCPBridge *parent) { this->parent_ = parent; }
-    void press_action() override;
+class HCPBridgeButton : public button::Button, public Component {
+ public:
+  void set_hcpbridge_parent(HCPBridge *parent) { this->parent_ = parent; }
+  void set_button_type(HCPBridgeButtonType type) { this->type_ = type; }
+  void press_action() override;
 
-  protected:
-    HCPBridge *parent_;
-};
-
-class HCPBridgeButtonImpulse : public button::Button, public Component {
-  public:
-    void set_hcpbridge_parent(HCPBridge *parent) { this->parent_ = parent; }
-    void press_action() override;
-
-  protected:
-    HCPBridge *parent_;
+ protected:
+  HCPBridge *parent_{nullptr};
+  HCPBridgeButtonType type_{HCPBRIDGE_BUTTON_IMPULSE};
 };
 
 }  // namespace hcpbridge

@@ -1,0 +1,15 @@
+# expect: are required on the ESP32C3
+esphome:
+  name: rejected-case
+external_components:
+  - source:
+      type: local
+      path: "../../../components/"
+esp32:
+  variant: esp32c3
+  framework:
+    type: esp-idf
+logger:
+  baud_rate: 0
+hcpbridge:
+  uart_num: 1

@@ -32,6 +32,7 @@
 *.app
 
 .esphome
+.esphome-venv
 
 **/__pycache__
 secrets.yaml

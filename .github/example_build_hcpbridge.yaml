@@ -11,15 +11,19 @@ substitutions:
   sen_txt: "${friendly_name} State" 
   sw_vent: "${friendly_name} Venting" 
   sw_half: "${friendly_name} Open Half" 
-  sen_pos: "${friendly_name} Position" 
+  sen_pos: "${friendly_name} Position"
+  sen_target: "${friendly_name} Target position"
+  fault_name: "${friendly_name} Fault"
+  serial_name: "${friendly_name} Serial number"
+  firmware_name: "${friendly_name} Firmware version"
+  build: "ci"
 
 esphome:
   name: "${name}"
   friendly_name: "${friendly_name}"
-  libraries:
-    - emelianov/modbus-esp8266
-  platformio_options:
-    board_build.f_cpu: 240000000L
+  project:
+    name: "hcpbridge.esphome"
+    version: "${build}"
 
 external_components:
   - source:
@@ -28,8 +32,9 @@ external_components:
 
 esp32:
   board: adafruit_feather_esp32s3 #set your board
+  cpu_frequency: 240MHZ
   framework:
-    type: arduino
+    type: esp-idf
 
 hcpbridge:
   id: hcpbridge_id
@@ -45,14 +50,19 @@ cover:
 
 binary_sensor:
   - platform: hcpbridge
-    is_connected:
-      name: "${connection_state}"
-      id: sensor_connected
-    relay_state:
-      name: "${relay_name}"
-      id: sensor_relay
-      #on_state:
-      #create your automation based on Garage Door Relay state
+    type: is_connected
+    name: "${connection_state}"
+    id: sensor_connected
+  - platform: hcpbridge
+    type: relay_state
+    name: "${relay_name}"
+    id: sensor_relay
+    #on_state:
+    #create your automation based on Garage Door Relay state
+  - platform: hcpbridge
+    type: actuator_error
+    name: "${fault_name}"
+    id: sensor_actuator_error
 
 output:
   - platform: hcpbridge
@@ -66,20 +76,38 @@ light:
 
 button:
   - platform: hcpbridge
-    vent_button:
-      id: button_vent
-      name: "${btn_vent}"
-    impulse_button:
-      id: button_impulse
-      name: "${btn_impulse}"
-    half_button:
-      id: button_half
-      name: "${btn_half}"
+    type: vent
+    id: button_vent
+    name: "${btn_vent}"
+  - platform: hcpbridge
+    type: impulse
+    id: button_impulse
+    name: "${btn_impulse}"
+  - platform: hcpbridge
+    type: half
+    id: button_half
+    name: "${btn_half}"
 
 text_sensor:
   - platform: hcpbridge
+    type: state
     id: sensor_templ_state
     name: "${sen_txt}"
+  - platform: hcpbridge
+    type: link_state
+    id: sensor_link
+    name: "${friendly_name} Link"
+    entity_category: diagnostic
+  - platform: hcpbridge
+    type: serial_number
+    id: sensor_drive_serial
+    name: "${serial_name}"
+    entity_category: diagnostic
+  - platform: hcpbridge
+    type: firmware_version
+    id: sensor_drive_firmware
+    name: "${firmware_name}"
+    entity_category: diagnostic
 #    filters:
 #      - substitute:
 #        - "Opening -> your text"
@@ -95,19 +123,25 @@ text_sensor:
 
 switch:
   - platform: hcpbridge
-    vent_switch:
-      id: switch_vent
-      name: "${sw_vent}"
-      restore_mode: disabled
-    half_switch:
-      id: half_switch
-      name: "${sw_half}"
-      restore_mode: disabled
+    type: vent
+    id: switch_vent
+    name: "${sw_vent}"
+    restore_mode: disabled
+  - platform: hcpbridge
+    type: half
+    id: half_switch
+    name: "${sw_half}"
+    restore_mode: disabled
 
 sensor:
   - platform: hcpbridge
+    type: position
     id: sensor_position
     name: ${sen_pos}
+  - platform: hcpbridge
+    type: target_position
+    id: sensor_target_position
+    name: ${sen_target}
 
 api:
   services:
@@ -135,10 +169,16 @@ wifi:
   ssid: "My Network"
   password: "My Password"
 
-# Enable logging
+# Enable logging. The console is off on purpose: this component logs from its
+# own task, and at a low baud rate that output sits in front of an answer the
+# drive is waiting for. The network log is unaffected.
 logger:
   level: WARN
+  baud_rate: 0
 
 # Example configuration entry
 ota:
   - platform: esphome
+    on_begin:
+      then:
+        - lambda: 'id(hcpbridge_id).announce_pause();'

@@ -1,39 +1,40 @@
+import esphome.codegen as cg
 from esphome.components import switch
 import esphome.config_validation as cv
-import esphome.codegen as cg
-from .. import hcpbridge_ns, CONF_HCPBridge_ID, HCPBridge
+from esphome.const import CONF_TYPE
+
+from .. import CONF_HCPBridge_ID, HCPBridge, hcpbridge_ns
 
 DEPENDENCIES = ["hcpbridge"]
 
-# Rename existing switch
-HCPBridgeSwitchVent = hcpbridge_ns.class_("HCPBridgeSwitchVent", switch.Switch, cg.Component)
-HCPBridgeSwitchHalf = hcpbridge_ns.class_("HCPBridgeSwitchHalf", switch.Switch, cg.Component)
+HCPBridgeSwitch = hcpbridge_ns.class_("HCPBridgeSwitch", switch.Switch, cg.Component)
+SwitchType = hcpbridge_ns.enum("HCPBridgeSwitchType")
 
-CONF_SWITCH_VENT = "vent_switch"
-CONF_SWITCH_HALF = "half_switch"
+TYPES = {
+    "vent": SwitchType.HCPBRIDGE_SWITCH_VENT,
+    "half": SwitchType.HCPBRIDGE_SWITCH_HALF,
+}
 
-CONFIG_SCHEMA = cv.Schema(
+ICONS = {
+    "vent": "mdi:hvac",
+    "half": "mdi:fraction-one-half",
+}
+
+CONFIG_SCHEMA = cv.typed_schema(
     {
-        cv.GenerateID(CONF_HCPBridge_ID): cv.use_id(HCPBridge),
-        cv.Optional(CONF_SWITCH_VENT): switch.switch_schema(
-            HCPBridgeSwitchVent, icon="mdi:hvac"
-        ),
-        cv.Optional(CONF_SWITCH_HALF): switch.switch_schema(
-            HCPBridgeSwitchHalf, icon="mdi:fraction-one-half"
-        ),
-    }
-).extend(cv.COMPONENT_SCHEMA)
+        name: switch.switch_schema(HCPBridgeSwitch, icon=ICONS[name])
+        .extend({cv.GenerateID(CONF_HCPBridge_ID): cv.use_id(HCPBridge)})
+        .extend(cv.COMPONENT_SCHEMA)
+        for name in TYPES
+    },
+    key=CONF_TYPE,
+)
 
 
 async def to_code(config):
+    var = await switch.new_switch(config)
+    await cg.register_component(var, config)
+
     parent = await cg.get_variable(config[CONF_HCPBridge_ID])
-
-    if conf := config.get(CONF_SWITCH_VENT):
-        vent_switch = await switch.new_switch(conf)
-        await cg.register_component(vent_switch, conf)
-        cg.add(vent_switch.set_hcpbridge_parent(parent))
-
-    if conf := config.get(CONF_SWITCH_HALF):
-        half_switch = await switch.new_switch(conf)
-        await cg.register_component(half_switch, conf)
-        cg.add(half_switch.set_hcpbridge_parent(parent))
+    cg.add(var.set_hcpbridge_parent(parent))
+    cg.add(var.set_switch_type(TYPES[config[CONF_TYPE]]))
