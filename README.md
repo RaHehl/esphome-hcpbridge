@@ -499,6 +499,29 @@ watched what came back, so halving the reported position passed all of them.
 
 I am open for contribution. Just get in contact with me.
 
+# Safety
+
+This moves a power-operated door from somewhere you cannot see it. Only send a
+command when you know nobody and nothing can be in the way, and keep the door
+in sight while a device is being flashed: one that is updated and then does not
+come back is worse than one that was never touched.
+
+Nothing here replaces the drive's own safety equipment. The light barrier and
+the force cut-out belong to the drive and have to keep working; this accessory
+presses the same buttons a wall switch does and can neither see an obstruction
+nor stop one.
+
+# Not affiliated with Hörmann
+
+This is an independent community project. Hörmann, SupraMatic and Promatic are
+trademarks of their respective owner and are used here only to say which drives
+this works with. There is no connection to, sponsorship by or endorsement from
+Hörmann.
+
+The protocol support is written from published descriptions of the bus and from
+watching real traffic. This repository contains no Hörmann source code,
+firmware or other material.
+
 # License
 
 ```
